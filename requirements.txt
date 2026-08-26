@@ -1,0 +1,4 @@
+gradio==6.26.0
+pydantic==2.13.4
+Pillow==12.3.0
+pytest==9.1.1

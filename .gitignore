@@ -1,8 +1,44 @@
-.venv/
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
 .pytest_cache/
-.env
-runtime/*.jsonl
-runtime/uploads/
-*.pyc
+.coverage
+htmlcov/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 编辑器与操作系统
+.vscode/
+.idea/
 .DS_Store
+Thumbs.db
+
+# 本地环境变量
+.env
+.env.*
+!.env.example
+
+# 运行时健康数据
+data/health_events.jsonl
+data/health_events.jsonl.*
+data/private/
+data/uploads/
+
+# 原始图片不得进入数据目录或 Git
+data/**/*.jpg
+data/**/*.jpeg
+data/**/*.png
+data/**/*.webp
+data/**/*.gif
+
+# 完整或未经裁剪的数据集
+data/full/
+data/raw/
+
+# 构建产物
+build/
+dist/
+*.egg-info/
