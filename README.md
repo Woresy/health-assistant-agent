@@ -64,6 +64,17 @@ python -m pytest -q tests/e2e
 
 E2E 测试使用 `tests/fixtures/meal.png` 固定图片，不启动浏览器、不依赖 API Key，也不会写入正式健康数据文件。
 
+检索单元测试、固定评测测试和命令行评测分别执行：
+
+```bash
+python -m pytest -q tests/unit tests/eval
+python scripts/run_eval.py
+```
+
+当前 28 条示例数据、20 条固定查询的真实指标为：Recall@3 `1.0`、
+Top1 Accuracy `1.0`、Rejection Accuracy `1.0`、Overall Pass Rate `1.0`。
+详细口径和失败清单见 `docs/EVALUATION.md` 与 `docs/eval_report.json`。
+
 ## 数据存储
 
 确认后的健康事件保存在：
@@ -78,13 +89,26 @@ data/health_events.jsonl
 
 ## 食物数据来源
 
-`data/samples/foods_sample.json` 包含 9 条手写示例占位数据。
+`data/samples/foods_sample.json` 包含 28 条手写示例占位数据。
 
 数据来源字段标记为：
 
 > 《中国食物成分表》第 6 版整理仓库（示例占位，仅供学习）
 
 该文件不是《中国食物成分表》的完整数据集，不应作为正式或生产环境的营养数据库使用。
+
+完整上游数据不得提交。取得本地数据后可执行：
+
+```bash
+python scripts/prepare_food_data.py \
+  --src <上游json目录> \
+  --out data/full/foods_normalized.json \
+  --aliases data/aliases.json \
+  --report data/full/prepare_report.json
+```
+
+应用优先读取 `FOOD_DATA_PATH`，否则读取已存在的本地完整档，最后回落到公开
+示例档。数据来源、质量标记和版权边界详见 `docs/DATA_SOURCES.md`。
 
 ## 重要声明
 
@@ -104,7 +128,9 @@ data/health_events.jsonl
 - 单张 JPG、JPEG、PNG 图片输入。
 - 图片空文件、损坏、超限及格式错误校验。
 - 手动填写食物名称和克重。
-- 标准名、别名、包含词检索。
+- 标准名、别名、双向包含和字符模糊四阶段检索。
+- 可解释候选分数、命中词、数据集信息和选择模式。
+- 独立检索 Trace 与可重算营养证据。
 - Top-K 固定食物候选。
 - “西红柿”召回“番茄”。
 - 确定性营养计算。
@@ -121,7 +147,7 @@ data/health_events.jsonl
 - 大模型调用。
 - 教练风格和个性化健康建议。
 - water、weight、exercise 记录流程。
-- 完整食物数据库。
+- 可提交的完整食物数据库（完整档只允许本地准备和使用）。
 - 云端数据库。
 - 登录、鉴权和多用户系统。
 - 医疗诊断或治疗建议。
