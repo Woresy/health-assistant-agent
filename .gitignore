@@ -24,6 +24,7 @@ Thumbs.db
 # 运行时健康数据
 data/health_events.jsonl
 data/health_events.jsonl.*
+data/traces.jsonl
 data/private/
 data/uploads/
 
