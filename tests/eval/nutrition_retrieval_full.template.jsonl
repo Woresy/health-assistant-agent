@@ -1,0 +1,20 @@
+{"case_id":"standard_001","query":"番茄","expected_food_codes":[],"case_type":"standard_name","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"standard_002","query":"鸡蛋","expected_food_codes":[],"case_type":"standard_name","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"alias_001","query":"西红柿","expected_food_codes":[],"case_type":"alias","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"alias_002","query":"土豆","expected_food_codes":[],"case_type":"alias","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"alias_003","query":"青花菜","expected_food_codes":[],"case_type":"alias","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"alias_004","query":"鲑鱼","expected_food_codes":[],"case_type":"alias","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"colloquial_001","query":"橙子","expected_food_codes":[],"case_type":"colloquial","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"colloquial_002","query":"萝卜","expected_food_codes":[],"case_type":"colloquial","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"colloquial_003","query":"水豆腐","expected_food_codes":[],"case_type":"colloquial","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"compound_001","query":"西红柿炒鸡蛋","expected_food_codes":[],"case_type":"compound_dish","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"compound_002","query":"宫爆鸡丁","expected_food_codes":[],"case_type":"compound_dish","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"compound_003","query":"什锦炒饭","expected_food_codes":[],"case_type":"compound_dish","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"similar_001","query":"菜花","expected_food_codes":[],"case_type":"similar_food","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"similar_002","query":"红萝卜","expected_food_codes":[],"case_type":"similar_food","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"similar_003","query":"酸牛奶","expected_food_codes":[],"case_type":"similar_food","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"similar_004","query":"纯牛奶","expected_food_codes":[],"case_type":"similar_food","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"typo_001","query":"蕃茄","expected_food_codes":[],"case_type":"typo","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"typo_002","query":"鸡匈肉","expected_food_codes":[],"case_type":"typo","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"typo_003","query":"三纹鱼","expected_food_codes":[],"case_type":"typo","note":"完整数据准备后人工填写真实 foodCode"}
+{"case_id":"not_found_001","query":"火星不存在食物","expected_food_codes":[],"case_type":"not_found","note":"完整数据也应拒答；人工核验后保留空数组"}

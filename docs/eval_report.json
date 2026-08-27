@@ -1,0 +1,54 @@
+{
+  "dataset_id": "foods_sample",
+  "dataset_record_count": 28,
+  "case_count": 20,
+  "expected_case_count": 19,
+  "not_found_case_count": 1,
+  "recall_at_3": 1.0,
+  "top1_accuracy": 1.0,
+  "rejection_accuracy": 1.0,
+  "overall_pass_rate": 1.0,
+  "by_case_type": {
+    "alias": {
+      "total": 4,
+      "passed": 4,
+      "pass_rate": 1.0
+    },
+    "colloquial": {
+      "total": 3,
+      "passed": 3,
+      "pass_rate": 1.0
+    },
+    "compound_dish": {
+      "total": 3,
+      "passed": 3,
+      "pass_rate": 1.0
+    },
+    "not_found": {
+      "total": 1,
+      "passed": 1,
+      "pass_rate": 1.0
+    },
+    "similar_food": {
+      "total": 4,
+      "passed": 4,
+      "pass_rate": 1.0
+    },
+    "standard_name": {
+      "total": 2,
+      "passed": 2,
+      "pass_rate": 1.0
+    },
+    "typo": {
+      "total": 3,
+      "passed": 3,
+      "pass_rate": 1.0
+    }
+  },
+  "failures": [],
+  "thresholds": {
+    "recall_at_3": 0.85,
+    "rejection_accuracy": 1.0
+  },
+  "passed": true
+}
