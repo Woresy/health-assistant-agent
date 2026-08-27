@@ -23,15 +23,17 @@ from src.nutrition.repository import (
 )
 from src.storage.jsonl_store import HealthEventStore, JsonlReadError
 from src.tools.confirmation import issue_confirmation_token
+from src.tools.retrieve_nutrition_candidates import (
+    retrieve_nutrition_candidates,
+)
 from src.tools.save_health_event import save_health_event
 from src.ui.image_input import validate_image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-FOODS_PATH = PROJECT_ROOT / "data" / "samples" / "foods_sample.json"
 EVENTS_PATH = PROJECT_ROOT / "data" / "health_events.jsonl"
 
-repository = FoodRepository(FOODS_PATH)
+repository = FoodRepository()
 event_store = HealthEventStore(EVENTS_PATH)
 
 
@@ -42,7 +44,7 @@ def _error_text(error_code: str, message: str) -> str:
 def search_candidates(
     image_path: str | None,
     food_query: str,
-) -> tuple[gr.Dropdown, list[list[Any]], str]:
+) -> tuple[gr.Dropdown, list[list[Any]], str, dict[str, Any]]:
     """校验图片并根据用户手填名称展示候选。"""
 
     image_result = validate_image(image_path)
@@ -54,58 +56,92 @@ def search_candidates(
                 image_result.error_code or "IMAGE_INVALID",
                 image_result.message,
             ),
+            {},
         )
 
-    try:
-        result = repository.search(food_query, top_k=5)
-    except NutritionDataError as exc:
+    tool_result = retrieve_nutrition_candidates(
+        query=food_query,
+        top_k=5,
+        repository=repository,
+    )
+    if not tool_result["ok"]:
+        error = tool_result["error"]
         return (
             gr.Dropdown(choices=[], value=None),
             [],
-            _error_text(exc.error_code, exc.message),
+            _error_text(error["error_code"], error["message"]),
+            {},
         )
 
-    if result.status == "not_found":
+    data = tool_result["data"]
+    trace = data["trace"]
+    if data["status"] == "not_found":
         return (
             gr.Dropdown(choices=[], value=None),
             [],
             _error_text(
                 "NOT_FOUND",
-                f"未找到“{result.query}”对应的固定食物数据；不会猜测营养值",
+                f"未找到“{data['query']}”对应的固定食物数据；不会猜测营养值。"
+                f"归一化检索词：{data['normalized_query']}；"
+                f"数据集：{data['dataset_id']}（{data['dataset_record_count']} 条）",
             ),
+            trace,
         )
 
     choices: list[tuple[str, str]] = []
     rows: list[list[Any]] = []
 
-    for candidate in result.candidates:
+    for candidate in data["candidates"]:
         choices.append(
             (
-                f"{candidate.name}｜{candidate.category}｜"
-                f"{candidate.match_type}",
-                candidate.food_id,
+                f"{candidate['name']}｜{candidate['category']}｜"
+                f"stage {candidate['stage']} {candidate['match_type']}",
+                candidate["food_id"],
             )
         )
         rows.append(
             [
-                candidate.food_id,
-                candidate.name,
-                candidate.category,
-                candidate.score,
-                candidate.match_type,
-                candidate.source,
-                candidate.source_version,
-                "manual",
+                candidate["food_id"],
+                candidate["name"],
+                candidate["category"],
+                candidate["stage"],
+                candidate["match_type"],
+                candidate["matched_term"],
+                candidate["score"],
+                candidate["source"],
+                candidate["source_version"],
+                candidate["candidate_source"],
             ]
         )
 
+    selected_value = (
+        data["candidates"][0]["food_id"]
+        if data["auto_select_allowed"]
+        else None
+    )
+    warning_text = ""
+    if data["trace_warning"] is not None:
+        warning_text = (
+            f"\n\nTrace 警告 [{data['trace_warning']['error_code']}]："
+            f"{data['trace_warning']['message']}；检索结果仍可使用。"
+        )
     return (
         gr.Dropdown(
             choices=choices,
-            value=result.candidates[0].food_id,
+            value=selected_value,
         ),
         rows,
-        f"已加载 {len(rows)} 个手动检索候选，请选择后计算。",
+        (
+            f"已加载 {len(rows)} 个手动检索候选。归一化检索词："
+            f"`{data['normalized_query']}`；选择模式："
+            f"`{data['selection_mode']}`；策略："
+            f"{', '.join(data['strategies_used'])}；数据集："
+            f"`{data['dataset_id']}`（{data['dataset_record_count']} 条）；"
+            f"耗时：{data['elapsed_ms']:.3f} ms。"
+            f"{'已按规则预选。' if selected_value else '候选有歧义，请手动选择。'}"
+            f"{warning_text}"
+        ),
+        trace,
     )
 
 
@@ -114,7 +150,7 @@ def calculate_preview(
     food_query: str,
     selected_food_id: str | None,
     raw_grams: Any,
-) -> tuple[str, dict[str, Any] | None, str]:
+) -> tuple[str, dict[str, Any] | None, str, str]:
     """计算预览，并签发与该预览绑定的确认令牌。"""
 
     image_result = validate_image(image_path)
@@ -125,6 +161,7 @@ def calculate_preview(
                 image_result.message,
             ),
             None,
+            "",
             "",
         )
 
@@ -137,6 +174,7 @@ def calculate_preview(
                     "没有固定食物数据，不能计算或保存",
                 ),
                 None,
+                "",
                 "",
             )
 
@@ -152,6 +190,7 @@ def calculate_preview(
                 ),
                 None,
                 "",
+                "",
             )
 
         food = repository.get_by_food_id(selected_food_id)
@@ -162,9 +201,9 @@ def calculate_preview(
             retrieval_query=food_query,
         )
     except NutritionDataError as exc:
-        return _error_text(exc.error_code, exc.message), None, ""
+        return _error_text(exc.error_code, exc.message), None, "", ""
     except NutritionCalculationError as exc:
-        return _error_text(exc.error_code, exc.message), None, ""
+        return _error_text(exc.error_code, exc.message), None, "", ""
 
     now = datetime.now(timezone.utc)
     event = HealthEvent.model_validate(
@@ -218,7 +257,26 @@ def calculate_preview(
         "**以上均为估算值，仅供学习，不构成医疗建议。**"
     )
 
-    return summary, preview_state, "计算完成，请核对后确认保存。"
+    evidence = (
+        "### 可重算证据\n\n"
+        f"- food_id：`{food.food_id}`\n"
+        f"- 克重：`{float(grams):g} g`\n"
+        f"- 热量：`{food.calories_per_100g:g} kcal/100g × "
+        f"{float(grams):g}g ÷ 100 = {estimate.calories_kcal:.2f} kcal`\n"
+        f"- 蛋白质：`{food.protein_per_100g:g} g/100g × "
+        f"{float(grams):g}g ÷ 100 = {estimate.protein_g:.2f} g`\n"
+        f"- 脂肪：`{food.fat_per_100g:g} g/100g × "
+        f"{float(grams):g}g ÷ 100 = {estimate.fat_g:.2f} g`\n"
+        f"- 碳水：`{food.carbs_per_100g:g} g/100g × "
+        f"{float(grams):g}g ÷ 100 = {estimate.carbs_g:.2f} g`"
+    )
+
+    return (
+        summary,
+        preview_state,
+        "计算完成，请核对可重算证据后确认保存。",
+        evidence,
+    )
 
 
 def _today_records() -> tuple[list[list[Any]], str]:
@@ -332,18 +390,19 @@ def confirm_save(
     return status, rows, today_summary
 
 
-def cancel_preview() -> tuple[None, str, str]:
+def cancel_preview() -> tuple[None, str, str, str]:
     """取消仅清除内存中的待保存状态，不写文件。"""
 
     return (
         None,
         "已取消，未写入任何半成品。",
         "尚未计算待确认记录。",
+        "### 可重算证据\n\n尚未选择数据行并计算。",
     )
 
 
 def build_demo() -> gr.Blocks:
-    """构建单页三 Tab 应用。"""
+    """构建包含检索证据的单页四 Tab 应用。"""
 
     with gr.Blocks(title="食物健康助手") as demo:
         gr.Markdown(
@@ -378,8 +437,10 @@ def build_demo() -> gr.Blocks:
                     "food_id",
                     "name",
                     "category",
-                    "匹配分",
+                    "stage",
                     "match_type",
+                    "matched_term",
+                    "score",
                     "source",
                     "source_version",
                     "candidate_source",
@@ -390,6 +451,8 @@ def build_demo() -> gr.Blocks:
                     "str",
                     "number",
                     "str",
+                    "str",
+                    "number",
                     "str",
                     "str",
                     "str",
@@ -409,6 +472,9 @@ def build_demo() -> gr.Blocks:
             calculate_button = gr.Button("计算营养估算", variant="primary")
             calculation_status = gr.Markdown()
             preview = gr.Markdown("尚未计算待确认记录。")
+            recompute_evidence = gr.Markdown(
+                "### 可重算证据\n\n尚未选择数据行并计算。"
+            )
 
             with gr.Row():
                 save_button = gr.Button("确认保存", variant="primary")
@@ -445,6 +511,13 @@ def build_demo() -> gr.Blocks:
             )
             today_summary = gr.Markdown()
 
+        with gr.Tab("检索证据"):
+            gr.Markdown(
+                "## 最近一次检索 Trace\n\n"
+                "这里展示归一化查询、策略、候选解释、选择规则与数据集信息。"
+            )
+            latest_trace = gr.JSON(value={}, label="RetrievalTrace JSON")
+
         with gr.Tab("隐私与数据"):
             gr.Markdown(
                 "## 隐私与数据\n\n"
@@ -464,6 +537,7 @@ def build_demo() -> gr.Blocks:
                 selected_food,
                 candidate_table,
                 candidate_status,
+                latest_trace,
             ],
         )
 
@@ -479,6 +553,7 @@ def build_demo() -> gr.Blocks:
                 preview,
                 preview_state,
                 calculation_status,
+                recompute_evidence,
             ],
         )
 
@@ -498,6 +573,7 @@ def build_demo() -> gr.Blocks:
                 preview_state,
                 save_status,
                 preview,
+                recompute_evidence,
             ],
         )
 
