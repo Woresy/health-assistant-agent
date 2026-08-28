@@ -2,3 +2,5 @@ gradio==6.26.0
 pydantic==2.13.4
 Pillow==12.3.0
 pytest==9.1.1
+numpy==2.4.6
+sentence-transformers==6.0.0
