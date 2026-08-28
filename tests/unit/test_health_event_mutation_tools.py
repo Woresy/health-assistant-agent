@@ -76,9 +76,7 @@ def _meal_payload(
             source_ref=(
                 "sample:FOOD_001"
             ),
-            retrieval_query=(
-                "番茄"
-            ),
+            retrieval_query="番茄",
             selected_food_code=(
                 "FOOD_001"
             ),
@@ -144,12 +142,8 @@ def _event(
                     mode="json"
                 )
             ),
-            "source_refs": (
-                source_refs
-            ),
-            "input_source": (
-                input_source
-            ),
+            "source_refs": source_refs,
+            "input_source": input_source,
             "created_at": BASE_TIME,
             "updated_at": BASE_TIME,
         }
@@ -411,6 +405,240 @@ def test_confirmed_update_is_idempotent(
     assert (
         persisted.payload.amount_ml
         == 600
+    )
+    assert len(
+        store.read_all()
+    ) == 1
+
+
+@pytest.mark.parametrize(
+    (
+        "event_type",
+        "patch",
+        "expected_value",
+    ),
+    [
+        (
+            "weight",
+            {
+                "payload": {
+                    "weight_kg": 64.8,
+                }
+            },
+            64.8,
+        ),
+        (
+            "exercise",
+            {
+                "payload": {
+                    "duration_minutes": 40,
+                }
+            },
+            40,
+        ),
+    ],
+)
+def test_weight_and_exercise_updates_require_confirmation_and_are_idempotent(
+    tmp_path: Path,
+    event_type: str,
+    patch: dict[str, object],
+    expected_value: float,
+) -> None:
+    """
+    体重和运动修改必须先生成草稿，
+    确认后才更新，重复确认保持幂等。
+    """
+
+    store = HealthEventStore(
+        tmp_path
+        / (
+            f"{event_type}_"
+            "update_events.jsonl"
+        )
+    )
+
+    original_event = _event(
+        event_type=event_type
+    )
+    store.append(
+        original_event
+    )
+
+    draft = (
+        prepare_update_health_event(
+            event_id=(
+                original_event.event_id
+            ),
+            user_id="user-1",
+            patch=patch,
+            idempotency_key=(
+                f"update-{event_type}-"
+                "confirmation"
+            ),
+            store=store,
+            now=(
+                BASE_TIME
+                + timedelta(
+                    minutes=1
+                )
+            ),
+        )
+    )
+
+    assert draft["ok"] is True
+    assert draft["error"] is None
+
+    before_confirmation = (
+        store.find_by_event_id(
+            original_event.event_id
+        )
+    )
+
+    assert before_confirmation is not None
+
+    if event_type == "weight":
+        assert isinstance(
+            before_confirmation.payload,
+            WeightPayload,
+        )
+        assert (
+            before_confirmation
+            .payload
+            .weight_kg
+            == pytest.approx(65.2)
+        )
+    else:
+        assert isinstance(
+            before_confirmation.payload,
+            ExercisePayload,
+        )
+        assert (
+            before_confirmation
+            .payload
+            .duration_minutes
+            == pytest.approx(20)
+        )
+
+    first_result = (
+        update_health_event(
+            event_id=(
+                original_event.event_id
+            ),
+            user_id="user-1",
+            replacement_event_input=(
+                draft["data"][
+                    "proposed_event"
+                ]
+            ),
+            confirmation_token=(
+                draft["data"][
+                    "confirmation_token"
+                ]
+            ),
+            idempotency_key=(
+                draft["data"][
+                    "idempotency_key"
+                ]
+            ),
+            store=store,
+        )
+    )
+
+    assert first_result["ok"] is True
+    assert first_result["error"] is None
+    assert (
+        first_result["data"][
+            "idempotent"
+        ]
+        is False
+    )
+
+    updated_event = (
+        store.find_by_event_id(
+            original_event.event_id
+        )
+    )
+
+    assert updated_event is not None
+
+    if event_type == "weight":
+        assert isinstance(
+            updated_event.payload,
+            WeightPayload,
+        )
+        assert (
+            updated_event
+            .payload
+            .weight_kg
+            == pytest.approx(
+                expected_value
+            )
+        )
+    else:
+        assert isinstance(
+            updated_event.payload,
+            ExercisePayload,
+        )
+        assert (
+            updated_event
+            .payload
+            .duration_minutes
+            == pytest.approx(
+                expected_value
+            )
+        )
+        assert (
+            updated_event
+            .payload
+            .activity_type
+            == "快走"
+        )
+        assert (
+            updated_event
+            .payload
+            .distance_km
+            == pytest.approx(2)
+        )
+        assert (
+            updated_event
+            .payload
+            .intensity
+            .value
+            == "medium"
+        )
+
+    second_result = (
+        update_health_event(
+            event_id=(
+                original_event.event_id
+            ),
+            user_id="user-1",
+            replacement_event_input=(
+                draft["data"][
+                    "proposed_event"
+                ]
+            ),
+            confirmation_token=(
+                draft["data"][
+                    "confirmation_token"
+                ]
+            ),
+            idempotency_key=(
+                draft["data"][
+                    "idempotency_key"
+                ]
+            ),
+            store=store,
+        )
+    )
+
+    assert second_result["ok"] is True
+    assert second_result["error"] is None
+    assert (
+        second_result["data"][
+            "idempotent"
+        ]
+        is True
     )
     assert len(
         store.read_all()
@@ -750,7 +978,6 @@ def test_four_event_types_can_be_deleted_idempotently(
     )
 
     assert draft["ok"] is True
-
     assert (
         store.read_all()
         == before_draft

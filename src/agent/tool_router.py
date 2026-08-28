@@ -104,7 +104,15 @@ class PrepareHealthEventArguments(
     input_source: (
         InputSource
         | None
-    ) = None
+    ) = Field(
+        default=None,
+        description=(
+            "仅饮食事件使用。"
+            "饮水、体重和运动事件"
+            "不要传入该字段，"
+            "来源由应用固定为 chat。"
+        ),
+    )
 
     amount_ml: float | None = Field(
         default=None,
@@ -241,7 +249,128 @@ class PrepareUpdateArguments(
     """更新草稿参数。"""
 
     event_id: str
-    patch: dict[str, Any]
+    patch: dict[str, Any] = Field(
+        description=(
+            "健康事件更新内容。"
+            "occurred_at 和 source_refs "
+            "位于 patch 顶层；"
+            "健康数值必须放在 payload 中。"
+            "例如修改体重应使用 "
+            "{'payload': {'weight_kg': 64.8}}。"
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_flat_payload_fields(
+        cls,
+        data: Any,
+    ) -> Any:
+        """
+        将模型常见的扁平健康字段归入 payload。
+
+        领域工具仍然只接收标准嵌套结构。
+        """
+
+        if not isinstance(
+            data,
+            dict,
+        ):
+            return data
+
+        raw_patch = data.get(
+            "patch"
+        )
+
+        if not isinstance(
+            raw_patch,
+            dict,
+        ):
+            return data
+
+        payload_field_names = {
+            "amount_ml",
+            "beverage",
+            "weight_kg",
+            "activity_type",
+            "duration_minutes",
+            "distance_km",
+            "intensity",
+            "note",
+        }
+
+        flat_fields = (
+            payload_field_names
+            & set(raw_patch)
+        )
+
+        if not flat_fields:
+            return data
+
+        normalized_data = dict(
+            data
+        )
+        normalized_patch = dict(
+            raw_patch
+        )
+
+        raw_payload = (
+            normalized_patch.get(
+                "payload"
+            )
+        )
+
+        if raw_payload is None:
+            normalized_payload: dict[
+                str,
+                Any,
+            ] = {}
+        elif isinstance(
+            raw_payload,
+            dict,
+        ):
+            normalized_payload = dict(
+                raw_payload
+            )
+        else:
+            raise ValueError(
+                "patch.payload 必须是对象"
+            )
+
+        duplicate_fields = (
+            flat_fields
+            & set(normalized_payload)
+        )
+
+        if duplicate_fields:
+            names = ", ".join(
+                sorted(
+                    duplicate_fields
+                )
+            )
+            raise ValueError(
+                "更新字段不能同时出现在 "
+                "patch 顶层和 patch.payload："
+                f"{names}"
+            )
+
+        for field_name in sorted(
+            flat_fields
+        ):
+            normalized_payload[
+                field_name
+            ] = normalized_patch.pop(
+                field_name
+            )
+
+        normalized_patch[
+            "payload"
+        ] = normalized_payload
+        normalized_data[
+            "patch"
+        ] = normalized_patch
+
+        return normalized_data
 
 
 class PrepareDeleteArguments(
@@ -657,10 +786,25 @@ class HealthToolRouter:
             if tool_name == (
                 "prepare_health_event"
             ):
+                validation_arguments = dict(
+                    arguments
+                )
+
+                if (
+                    validation_arguments.get(
+                        "event_type"
+                    )
+                    != EventType.MEAL
+                ):
+                    validation_arguments.pop(
+                        "input_source",
+                        None,
+                    )
+
                 validated = (
                     PrepareHealthEventArguments
                     .model_validate(
-                        arguments
+                        validation_arguments
                     )
                 )
 
