@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "index_id": "sha256:31e5572a46d19fca491d6ea67b71546c79bb1fd484d1363a06d45d130f953a13",
+  "created_at": "2026-08-28T15:51:54.065595+00:00",
+  "model_name": "BAAI/bge-small-zh-v1.5",
+  "model_revision": null,
+  "query_instruction": "为这个句子生成表示以用于检索相关文章：",
+  "dataset_id": "foods_sample:sha256:8adef74a5dc8",
+  "dataset_sha256": "8adef74a5dc802a6c8968b7b6263ea5b40e882ebbce7a03e3772724730d0b2c7",
+  "document_count": 28,
+  "embedding_dimension": 512,
+  "embedding_dtype": "float32",
+  "documents_file": "food_documents.json",
+  "documents_sha256": "5150fe42c4ee2154fdf5aa9382d44d61efb4c7ba92425efaf5e8e09f3730b1d0",
+  "embeddings_file": "food_embeddings.npy",
+  "embeddings_sha256": "b86283f30245587d5db5be50a4717670b42d2a1e1c2860102d9793f499dd3a9c"
+}
