@@ -1,12 +1,12 @@
 {
-  "retrieval_mode": "hybrid",
+  "retrieval_mode": "lexical",
   "dataset_id": "foods_sample:sha256:8adef74a5dc8",
   "dataset_record_count": 28,
   "index_dir": "/home/woresy/ai-project-practice/health-assistant-agent/data/index",
   "case_count": 20,
   "expected_case_count": 19,
   "not_found_case_count": 1,
-  "degraded_case_count": 20,
+  "degraded_case_count": 0,
   "recall_at_3": 0.9474,
   "top1_accuracy": 0.9474,
   "rejection_accuracy": 1.0,
@@ -62,8 +62,7 @@
         "standard_name",
         "alias",
         "contains",
-        "fuzzy",
-        "dense_unavailable:DENSE_INDEX_MISSING"
+        "fuzzy"
       ]
     }
   ],
@@ -72,5 +71,5 @@
     "rejection_accuracy": 1.0,
     "hybrid_requires_dense": true
   },
-  "passed": false
+  "passed": true
 }
