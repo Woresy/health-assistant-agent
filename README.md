@@ -1,53 +1,108 @@
-# 食物健康助手 Agent
+# 个人健康管理助理 Agent
 
 一个面向 AI 应用工程学习和求职作品集的个人健康管理助手。
 
-当前版本完成了“图片输入入口 → 手动食物描述 → Hybrid RAG 检索 → 用户确认 → 确定性营养计算 → HealthEvent 保存 → 今日汇总”的纵向链路。
-
-项目重点不是生成医疗建议，而是展示一套可运行、可解释、可评测、可拒答、可追溯的 Agent/RAG 工程实现。
+项目通过 Gradio 提供对话、饮食确认、健康事件管理和开发者证据页面，结合 OpenAI-compatible LLM、Hybrid RAG、确定性营养计算、工具调用、确认状态机和 JSONL 存储，实现可运行、可解释、可评测、可拒答、可追溯的健康记录流程。
 
 > 项目需求参考：[个人健康管理助理 Agent PRD](https://ruiyuan-ai-career-map.vercel.app/food-health-assistant-prd.html)
 
-## 项目状态
+> 本项目用于学习和个人生活记录演示，不提供医疗诊断、治疗、用药或紧急医疗服务。
 
-当前处于 P0 饮食记录与 Hybrid RAG 阶段。
+## 当前进度
+
+截至 2026-08-29：
+
+- 8.26：完成图片输入、人工食物候选、营养计算、确认和饮食保存主链；
+- 8.27：完成食物数据准备、Hybrid RAG、拒答门控和固定检索评测；
+- 8.28：完成饮食、饮水、体重、运动四类健康事件的保存、查询、修改和删除；
+- 8.29：正在验收健康时间线、每日汇总、多轮补参、Agent Trace 和失败 E2E。
+
+### 功能状态
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| 单张食物图片输入 | 已完成 | 图片仅作为输入入口，暂不进行视觉识别 |
-| 手动填写食物名称 | 已完成 | 支持标准名、别名和自然语言描述 |
-| 食物 Hybrid RAG | 已完成 | Lexical + Dense + RRF + Rule Rerank |
-| 语义提示文档 | 已完成 | 使用人工提示增强描述性查询 |
-| 检索拒答门控 | 已完成 | 拒绝低置信度、歧义和领域外查询 |
-| 用户确认候选 | 已完成 | 系统不会直接把检索第一名当作最终事实 |
-| 确定性营养计算 | 已完成 | 不允许大模型生成营养数值 |
-| meal HealthEvent 保存 | 已完成 | JSONL 存储、确认令牌和幂等保护 |
-| 今日记录与汇总 | 已完成 | 保存后重新读取本地事件文件 |
-| 检索 Trace | 已完成 | 保存查询、候选、策略、数据集和耗时 |
-| 单元测试 | 已完成 | 覆盖检索、门控、存储和计算 |
-| 核心链路 E2E | 已完成 | 无浏览器、无 API Key 的纵向链路测试 |
-| RAG 离线评测 | 已完成 | 支持 lexical 和 hybrid 两种模式 |
-| 图片食物识别 | 未实现 | 尚未接入 YOLO 或视觉模型 |
-| LLM Agent Loop | 未实现 | 尚无 model_rounds、tool_steps 和 state |
-| 四类 HealthEvent CRUD | 部分完成 | 当前主要实现 meal 的创建、读取和汇总 |
-| GitHub Actions CI | 未实现 | 最终验收前需要补充 |
-| P1 目标、记忆和 check-in | 未实现 | 属于后续阶段 |
+| 单张食物图片输入 | 已完成 | 图片作为输入入口，识别失败时仍可人工填写 |
+| 手动食物候选 | 已完成 | 支持标准名、别名和自然语言描述 |
+| Lexical Retrieval | 已完成 | 标准名、别名、包含和模糊匹配 |
+| Hybrid RAG | 已完成 | Dense Retrieval、RRF Fusion 和 Rule Rerank |
+| 检索拒答门控 | 已完成 | 低置信度、歧义和领域外查询不会进入营养计算 |
+| 用户确认食物候选 | 已完成 | 不会静默选择检索第一名 |
+| 确定性营养计算 | 已完成 | 营养数值来自结构化数据行和用户份量 |
+| 四类 HealthEvent 模型 | 已完成 | `meal`、`water`、`weight`、`exercise` |
+| 四类事件保存 | 已完成 | 参数校验、草稿、确认令牌和幂等写入 |
+| 四类事件查询 | 已完成 | 支持按用户、类型、日期和排序条件查询 |
+| 四类事件修改 | 已完成 | 先展示前后对比，确认后更新 |
+| 四类事件删除 | 已完成 | 先展示目标，确认后删除 |
+| LLM Agent Loop | 已完成 | 有限模型轮次、工具白名单和 Tool Result 回传 |
+| OpenAI-compatible Provider | 已完成 | 支持配置 DeepSeek 等兼容 Chat Completions Tools 的 Provider |
+| pending task | 已实现，验收中 | 缺少必填参数时暂存任务并继续补充 |
+| 健康时间线 | 已实现，验收中 | 从已保存事件读取并展示 |
+| 每日汇总 | 已实现，验收中 | 汇总只读取 committed events |
+| Agent 执行证据 | 部分完成 | 页面展示最新 `model_rounds`、`tool_steps` 和 `state` |
+| AgentTrace JSONL | 未完成 | 当前 Agent Session 和最新证据主要保存在内存 |
+| 失败流程 E2E | 部分完成 | 已有失败单元测试，仍需补齐阶段 E2E |
+| 图片食物识别 | 未完成 | 尚未接入真实 YOLO 权重 |
+| GitHub Actions CI | 未完成 | 最终验收前补充 |
+| P1 目标、记忆和 check-in | 未完成 | 不属于当前 P0 阶段 |
+
+## 8.28 完成结果
+
+8.28 阶段目标已经完成：
+
+> 饮食、饮水、体重、运动四类健康事件均支持保存、查询、修改和删除。
+
+四类事件共用统一的 `HealthEvent` 外层结构：
+
+```text
+HealthEvent
+├── schema_version
+├── event_id
+├── user_id
+├── event_type
+├── occurred_at
+├── payload
+├── source_refs
+├── input_source
+├── created_at
+└── updated_at
+```
+
+不同事件使用不同的 `payload`：
+
+| 事件类型 | 必填字段 | 可选字段 |
+| --- | --- | --- |
+| `meal` | 食物、份量、营养估算、来源 | 候选来源 |
+| `water` | `amount_ml` | 饮品名称、备注 |
+| `weight` | `weight_kg` | 备注 |
+| `exercise` | `activity_type`、`duration_minutes` | 距离、强度、备注 |
+
+### CRUD 安全边界
+
+保存、修改和删除都遵守：
+
+```text
+用户请求
+→ Agent 选择白名单工具
+→ 参数校验
+→ 生成草稿
+→ 展示待执行内容
+→ 等待用户确认
+→ 执行写操作
+→ 幂等校验
+→ 重新读取持久化结果
+```
+
+模型只能提出操作，不能绕过确认直接写入数据。
 
 ## 核心设计原则
 
-### 1. RAG 负责找食物，不负责生成营养事实
+### 1. RAG 只负责找食物
 
-Hybrid RAG 只负责从固定食物数据库中检索候选。
+Hybrid RAG 负责从固定食物数据库中检索候选，不负责生成营养事实。
 
-热量、蛋白质、脂肪和碳水等数值必须来自结构化食物数据，不能由 Embedding 模型或大模型生成。
+热量、蛋白质、脂肪和碳水等数值必须来自结构化食物记录。
 
-### 2. 用户必须确认食物候选
-
-即使检索结果置信度较高，当前版本也不会自动保存第一名。
-
-用户必须从候选列表中明确选择食物，再进入营养计算。
-
-### 3. 营养计算必须确定性执行
+### 2. 营养计算必须确定
 
 计算公式固定为：
 
@@ -57,22 +112,26 @@ Hybrid RAG 只负责从固定食物数据库中检索候选。
 
 同一食物、同一份量和同一数据版本必须得到相同结果。
 
+LLM 不得补写、改写或猜测营养数值。
+
+### 3. 候选必须由用户确认
+
+系统不会因为某个食物排在检索第一名就自动保存。
+
+用户必须检查并选择候选，才能进入营养计算和保存流程。
+
 ### 4. 证据不足时拒答
 
-向量检索永远可以返回一个“最相似结果”，但最相似不代表正确。
+系统在检索后执行拒答门控：
 
-项目在 Hybrid Retrieval 后增加了拒答门控：
+- 标准名精确匹配可以放行；
+- 人工别名精确匹配可以放行；
+- Lexical 和 Dense 共同命中可以放行；
+- 类别与语义证据不足时拒绝；
+- 第一名与竞争候选过于接近时要求用户选择；
+- 领域外或低置信度查询返回 `not_found`。
 
-- 标准名精确匹配：放行；
-- 人工别名精确匹配：放行；
-- 词法与 Dense 共同命中：放行；
-- 查询类别与候选类别一致且 Dense 分数达标：放行；
-- Dense 分数过低：拒答；
-- 第一名和竞争候选过于接近：拒答；
-- 查询缺少饮食领域信号：拒答；
-- 没有候选：拒答。
-
-拒答结果使用：
+拒答结果不会进入营养计算：
 
 ```text
 status = not_found
@@ -80,41 +139,132 @@ candidates = []
 auto_select_allowed = false
 ```
 
-系统不会使用被拒答的候选计算营养数据。
+### 5. 写操作必须确认
+
+以下操作不得静默执行：
+
+- 保存健康事件；
+- 修改健康事件；
+- 删除健康事件。
+
+确认前只生成草稿，不修改 JSONL。
+
+### 6. 重复操作必须幂等
+
+保存、修改和删除都使用幂等键。
+
+使用相同确认信息重复提交时，只返回已经存在的最终结果，不重复创建或修改数据。
 
 ## 系统架构
 
 ```mermaid
-flowchart LR
-    A[图片输入和手动描述] --> B[图片与参数校验]
-    B --> C[食物检索 Tool]
+flowchart TD
+    U[用户输入或图片] --> UI[Gradio UI]
 
-    C --> D[Lexical Retrieval]
-    C --> E[Dense Retrieval]
+    UI --> CS[Conversation Session]
+    CS --> AR[Agent Runner]
+    AR --> MP[OpenAI-compatible Model Provider]
+    AR --> TR[Health Tool Router]
 
-    D --> F[RRF Fusion]
-    E --> F
+    TR --> PH[prepare health event]
+    TR --> QH[query health events]
+    TR --> PU[prepare update]
+    TR --> PD[prepare delete]
+    TR --> DS[get daily summary]
 
-    F --> G[Rule Rerank]
-    G --> H[Refusal Gate]
+    PH --> CF[确认状态机]
+    PU --> CF
+    PD --> CF
 
-    H -->|证据不足| I[not_found 拒答]
-    H -->|证据通过| J[候选列表]
+    CF --> SH[save health event]
+    CF --> UH[update health event]
+    CF --> DH[delete health event]
 
-    J --> K[用户手动确认]
-    K --> L[结构化食物事实]
-    L --> M[确定性营养计算]
-    M --> N[待保存预览]
-    N --> O[确认令牌和幂等校验]
-    O --> P[HealthEvent JSONL]
-    P --> Q[今日记录与汇总]
+    SH --> STORE[HealthEvent JSONL Store]
+    UH --> STORE
+    DH --> STORE
+    QH --> STORE
+    DS --> STORE
 
-    C -.检索证据.-> R[Retrieval Trace]
+    UI --> RAG[Hybrid Nutrition RAG]
+    RAG --> LEX[Lexical Retrieval]
+    RAG --> DENSE[Dense Retrieval]
+    LEX --> RRF[RRF Fusion]
+    DENSE --> RRF
+    RRF --> RR[Rule Rerank]
+    RR --> GATE[Refusal Gate]
+    GATE --> CAND[用户确认候选]
+    CAND --> CALC[确定性营养计算]
+    CALC --> PH
+
+    RAG -.检索证据.-> RT[Retrieval Trace]
+    AR -.最新执行证据.-> EV[model rounds / tool steps / state]
 ```
 
-## Hybrid RAG 检索流程
+## Agent 执行链路
 
-一次 Hybrid 检索依次执行：
+一次 Agent 对话可能经历：
+
+```text
+用户输入
+→ 构造最小 messages
+→ 模型返回文本或 tool call
+→ 工具白名单检查
+→ 工具参数校验与归一化
+→ 执行只读工具或生成写操作草稿
+→ Tool Result 返回模型
+→ 模型继续、追问或结束
+```
+
+Agent 在以下情况终止当前轮次：
+
+- 模型返回最终文本；
+- 缺少参数，需要用户补充；
+- 已生成草稿，等待用户确认；
+- 用户取消；
+- 工具参数无效；
+- 工具执行失败；
+- 达到最大模型轮数。
+
+### Agent 状态
+
+主要状态包括：
+
+```text
+idle
+running
+awaiting_clarification
+awaiting_confirmation
+completed
+failed
+cancelled
+```
+
+### 模型可见工具
+
+模型只能调用静态白名单中的工具：
+
+```text
+prepare_health_event
+query_health_events
+get_daily_health_summary
+prepare_update_health_event
+prepare_delete_health_event
+```
+
+模型不能直接调用真正的写操作。
+
+用户确认后，程序才会执行：
+
+```text
+save_health_event
+update_health_event
+delete_health_event
+```
+
+## Hybrid RAG
+
+### 在线检索流程
 
 ```text
 用户查询
@@ -122,16 +272,15 @@ flowchart LR
 → 四阶段词法召回
 → Dense 向量召回
 → RRF 排名融合
-→ 类别约束与规则重排
+→ 类别约束和规则重排
 → 弱单字包含过滤
 → 拒答门控
-→ 用户确认候选
-→ 根据 food_id 读取结构化营养事实
+→ 返回候选
+→ 用户确认
+→ 读取结构化营养事实
 ```
 
-### 词法召回
-
-词法召回包含四个阶段：
+### 词法召回阶段
 
 1. 标准名称完全匹配；
 2. 人工别名完全匹配；
@@ -140,16 +289,16 @@ flowchart LR
 
 ### Dense Retrieval
 
-Dense Retrieval 使用：
+当前 Embedding 模型：
 
 ```text
 BAAI/bge-small-zh-v1.5
 ```
 
-食物记录会转换成语义检索文档，内容包括：
+每条食物会转换成一条检索文档，包括：
 
 - 标准名称；
-- 别名；
+- 人工别名；
 - 食物类别；
 - 人工语义提示。
 
@@ -157,17 +306,15 @@ BAAI/bge-small-zh-v1.5
 
 ### RRF Fusion
 
-项目使用 Reciprocal Rank Fusion 融合词法排名和 Dense 排名。
-
-RRF 主要依赖两个检索通道中的排名，不直接混合两套量纲不同的原始分数。
+Reciprocal Rank Fusion 使用 Lexical 和 Dense 两个通道的排名进行融合，不直接混合量纲不同的原始分数。
 
 ### Rule Rerank
 
 融合后继续执行确定性规则：
 
 - 标准名和别名精确匹配优先；
-- 查询明确提到类别时，同类别候选优先；
-- 单字食物名不能因为出现在长描述中形成强包含命中。
+- 查询明确包含类别时，同类别候选优先；
+- 单字食物名不能因为出现在无关长描述中形成强匹配。
 
 例如：
 
@@ -175,13 +322,50 @@ RRF 主要依赖两个检索通道中的排名，不直接混合两套量纲不�
 橙色的根茎类蔬菜
 ```
 
-不能因为“橙色”中包含“橙”，就把水果“橙”排在胡萝卜前面。
+不能因为“橙色”包含“橙”，就把水果“橙”排在“胡萝卜”前面。
+
+## RAG 评测结果
+
+固定评测集包含 20 条查询，覆盖：
+
+- 标准名称；
+- 人工别名；
+- 口语名称；
+- 复合菜；
+- 相似食物；
+- 错别字；
+- 不存在食物；
+- 领域外拒答。
+
+当前 `docs/eval_hybrid.json` 结果：
+
+| 指标 | 当前结果 | 门槛 |
+| --- | ---: | ---: |
+| Recall@3 | 0.9474 | ≥ 0.85 |
+| Top-1 Accuracy | 0.9474 | 记录项 |
+| Rejection Accuracy | 1.0 | = 1.0 |
+| Dense 降级次数 | 0 | = 0 |
+| 报告状态 | `passed: true` | `true` |
+
+评测报告是检索指标的事实来源。
+
+修改以下任一内容后必须重新构建索引并生成评测报告：
+
+- 食物数据；
+- 人工别名；
+- 语义提示；
+- Embedding 模型；
+- 查询指令；
+- 检索规则；
+- 拒答门控阈值。
 
 ## 技术栈
 
 - Python 3.11+
-- Gradio
+- Gradio 6
 - Pydantic v2
+- OpenAI Python SDK
+- python-dotenv
 - Pillow
 - NumPy
 - Sentence Transformers
@@ -189,11 +373,7 @@ RRF 主要依赖两个检索通道中的排名，不直接混合两套量纲不�
 - pytest
 - JSON Lines
 
-所有 Python 直接依赖均在 `requirements.txt` 中固定版本。
-
-项目不需要任何大模型 API Key。
-
-第一次构建索引或第一次运行 Dense Retrieval 时，Sentence Transformers 可能需要从模型仓库下载 BGE 模型。模型已经缓存后，可以继续在本地使用。
+所有直接依赖均固定在 `requirements.txt` 中。
 
 ## 目录结构
 
@@ -202,6 +382,7 @@ health-assistant-agent/
 ├── app.py
 ├── requirements.txt
 ├── .env.example
+├── .gitignore
 ├── README.md
 ├── LICENSE
 ├── data/
@@ -218,14 +399,23 @@ health-assistant-agent/
 │   ├── DECISIONS.md
 │   ├── EVALUATION.md
 │   ├── RAG.md
+│   ├── eval_hybrid.json
 │   ├── eval_lexical.json
-│   └── eval_hybrid.json
+│   └── scope.md
 ├── scripts/
 │   ├── prepare_food_data.py
 │   ├── build_food_index.py
 │   └── run_eval.py
 ├── src/
+│   ├── agent/
+│   │   ├── models.py
+│   │   ├── openai_model.py
+│   │   ├── runner.py
+│   │   └── tool_router.py
 │   ├── health/
+│   │   ├── models.py
+│   │   ├── migrations.py
+│   │   └── daily_summary.py
 │   ├── nutrition/
 │   │   ├── calculator.py
 │   │   ├── repository.py
@@ -237,38 +427,59 @@ health-assistant-agent/
 │   │   ├── evaluation.py
 │   │   └── text_normalize.py
 │   ├── storage/
+│   │   ├── jsonl_store.py
+│   │   └── trace_store.py
 │   ├── tools/
+│   │   ├── confirmation.py
+│   │   ├── prepare_health_event.py
+│   │   ├── save_health_event.py
+│   │   ├── query_health_events.py
+│   │   ├── prepare_health_event_mutation.py
+│   │   ├── update_health_event.py
+│   │   ├── delete_health_event.py
+│   │   ├── get_daily_health_summary.py
+│   │   └── retrieve_nutrition_candidates.py
 │   └── ui/
+│       ├── app.py
+│       └── image_input.py
 └── tests/
     ├── e2e/
+    │   └── test_manual_meal_flow.py
     ├── eval/
+    │   ├── nutrition_retrieval.jsonl
+    │   └── test_retrieval_eval.py
     ├── fixtures/
+    │   └── meal.png
     └── unit/
+        ├── test_agent_tool_router_normalization.py
+        ├── test_daily_summary.py
+        ├── test_health_agent_runner.py
+        ├── test_health_event_models.py
+        ├── test_health_event_mutation_tools.py
+        ├── test_hybrid_retrieval.py
+        ├── test_jsonl_store_crud.py
+        ├── test_openai_agent_model.py
+        ├── test_retrieval.py
+        └── test_retrieval_eval.py
 ```
 
 ## 十分钟快速启动
 
-### 1. 创建 Python 3.11 虚拟环境
-
-进入项目根目录：
+### 1. 克隆项目
 
 ```bash
+git clone https://github.com/Woresy/health-assistant-agent.git
 cd health-assistant-agent
 ```
 
-创建虚拟环境：
+### 2. 创建 Python 3.11 虚拟环境
 
 ```bash
 python3.11 -m venv .venv
-```
-
-激活虚拟环境：
-
-```bash
 source .venv/bin/activate
 ```
 
-确认当前解释器：
+确认版本：
 
 ```bash
 python --version
@@ -276,7 +487,7 @@ python --version
 
 预期为 Python 3.11 或更高版本。
 
-### 2. 安装依赖
+### 3. 安装依赖
 
 ```bash
 python -m ensurepip --upgrade
@@ -290,14 +501,32 @@ python -m pip install -r requirements.txt
 python -m pip
 ```
 
-不要混用系统环境中的裸 `pip`。
+避免混用系统环境中的裸 `pip`。
 
-### 3. 使用 Lexical 模式快速启动
-
-Lexical 模式不需要下载 Embedding 模型：
+### 4. 创建本地环境配置
 
 ```bash
-export RAG_MODE=lexical
+cp .env.example .env
+```
+
+默认配置为：
+
+```dotenv
+AGENT_PROVIDER_MODE=disabled
+RAG_MODE=lexical
+```
+
+在没有 LLM API Key、没有 Dense 模型网络访问的情况下，仍可以启动页面并使用：
+
+- 人工饮食候选；
+- Lexical 食物检索；
+- 确定性营养计算；
+- 健康时间线；
+- 每日汇总。
+
+### 5. 启动应用
+
+```bash
 python app.py
 ```
 
@@ -307,9 +536,60 @@ python app.py
 http://127.0.0.1:7860
 ```
 
-### 4. 使用 Hybrid RAG 模式启动
+## 配置真实 Agent Provider
 
-如果仓库中不存在可用的 `data/index`，先构建索引：
+项目支持提供 Chat Completions 和 Tool Calling 的 OpenAI-compatible Provider。
+
+编辑本地 `.env`：
+
+```dotenv
+APP_HOST=127.0.0.1
+APP_PORT=7860
+APP_TIMEZONE=Asia/Shanghai
+
+RAG_MODE=lexical
+FOOD_DATA_PATH=
+FOOD_INDEX_DIR=data/index
+
+AGENT_PROVIDER_MODE=openai_compatible
+AGENT_API_KEY=<你的API-Key>
+AGENT_BASE_URL=<Provider的OpenAI-compatible-Base-URL>
+AGENT_MODEL=<支持Tool-Calling的模型名称>
+
+AGENT_REQUEST_TIMEOUT=60
+AGENT_MAX_RETRIES=2
+AGENT_MAX_TOKENS=1024
+
+HEALTH_CONFIRMATION_SECRET=<至少32位的本地随机字符串>
+```
+
+DeepSeek 示例：
+
+```dotenv
+AGENT_PROVIDER_MODE=openai_compatible
+AGENT_API_KEY=<你的DeepSeek-API-Key>
+AGENT_BASE_URL=https://api.deepseek.com
+AGENT_MODEL=deepseek-v4-flash
+```
+
+注意：
+
+- 不要在配置值外保留 `<` 和 `>`；
+- 不要把真实 API Key 写入 `.env.example`；
+- 不要提交 `.env`；
+- Provider 必须支持 Chat Completions 和 Tool Calling；
+- Provider 超时、认证失败或参数异常时，页面应明确显示错误，不能伪造成功。
+
+## 配置 Hybrid RAG
+
+仓库中已有示例索引时，可以直接设置：
+
+```dotenv
+RAG_MODE=hybrid
+FOOD_INDEX_DIR=data/index
+```
+
+如果需要重新构建索引：
 
 ```bash
 python scripts/build_food_index.py \
@@ -318,36 +598,197 @@ python scripts/build_food_index.py \
   --index-dir data/index
 ```
 
-然后启动 Hybrid 模式：
+然后启动：
 
 ```bash
-export RAG_MODE=hybrid
-python app.py
+RAG_MODE=hybrid python app.py
 ```
 
-第一次运行可能需要下载：
+第一次加载 Dense 模型可能需要下载：
 
 ```text
 BAAI/bge-small-zh-v1.5
 ```
 
-下载时间取决于网络环境，不计入纯本地代码启动时间。
+模型缓存后可以继续在本地使用。
 
-## 使用流程
+## 页面说明
 
-1. 打开“记录饮食”页面。
-2. 上传一张 JPG、JPEG 或 PNG 图片。
+应用包含以下页面：
+
+### 今天
+
+展示：
+
+- 当前日期；
+- 已保存健康事件；
+- 饮水量；
+- 运动时长；
+- 最近一次体重；
+- 饮食营养估算汇总；
+- 数据为空或读取失败提示。
+
+### 对话
+
+用于：
+
+- 保存饮水、体重和运动；
+- 查询健康事件；
+- 生成修改草稿；
+- 生成删除草稿；
+- 确认或取消当前操作；
+- 查看 Agent 状态。
+
+### 健康时间线
+
+支持：
+
+- 选择日期；
+- 选择事件类型；
+- 重新读取 JSONL；
+- 按发生时间展示事件；
+- 查看 `event_id`，用于精确修改和删除。
+
+### 饮食确认
+
+用于：
+
+- 上传食物图片；
+- 手动填写食物名称或描述；
+- 检索食物候选；
+- 用户确认候选；
+- 输入食物克重；
+- 确定性计算营养值；
+- 确认保存饮食事件。
+
+### 开发者证据
+
+展示最近一次：
+
+- `tool_steps`；
+- Agent `state`；
+- pending task；
+- pending confirmation；
+- Retrieval Trace。
+
+确认令牌会被脱敏。
+
+### 隐私与数据
+
+说明：
+
+- 数据保存位置；
+- API Key 边界；
+- 图片处理方式；
+- Session 生命周期；
+- 健康安全限制。
+
+## 四类健康事件操作示例
+
+### 饮水保存
+
+输入：
+
+```text
+记录喝水500毫升，时间是现在
+```
+
+预期：
+
+```text
+prepare_health_event
+→ awaiting_confirmation
+→ 用户确认
+→ save_health_event
+```
+
+### 体重保存
+
+输入：
+
+```text
+记录体重65.2公斤，时间是现在
+```
+
+### 运动保存
+
+输入：
+
+```text
+记录跑步30分钟，距离5公里，中等强度，时间是现在
+```
+
+### 查询记录
+
+输入：
+
+```text
+查询我今天的饮水记录
+```
+
+需要精确修改或删除时，可以要求返回：
+
+```text
+请告诉我最新一条体重记录的 event_id
+```
+
+### 修改体重
+
+输入：
+
+```text
+把事件 <event_id> 的体重修改为64.8公斤，请先生成修改草稿
+```
+
+预期：
+
+```text
+prepare_update_health_event
+→ awaiting_confirmation
+→ 用户确认
+→ update_health_event
+```
+
+### 修改运动
+
+输入：
+
+```text
+把事件 <event_id> 的运动时长修改为40分钟，其他内容保持不变
+```
+
+### 删除事件
+
+输入：
+
+```text
+删除事件 <event_id>，请先展示待删除内容
+```
+
+预期：
+
+```text
+prepare_delete_health_event
+→ awaiting_confirmation
+→ 用户确认
+→ delete_health_event
+```
+
+## 人工饮食主链
+
+1. 打开“饮食确认”。
+2. 上传 JPG、JPEG 或 PNG 图片。
 3. 手动填写食物名称或食物描述。
 4. 填写可食部分克重。
 5. 点击“查找候选”。
-6. 检查候选、类别、匹配类型、分数和来源。
-7. 从候选列表中手动选择食物。
+6. 检查候选名称、类别、匹配方式、分数和来源。
+7. 从候选列表中明确选择食物。
 8. 点击“计算营养估算”。
-9. 检查食物、份量、营养值、来源和假设。
-10. 明确确认后保存。
-11. 在“今日记录”中查看重新读取的记录和汇总。
+9. 检查份量、营养值、来源和计算假设。
+10. 点击“确认保存饮食”。
+11. 在“今天”或“健康时间线”重新读取记录。
 
-图片目前仅作为输入入口，不执行图片识别，也不会复制到项目数据目录。
+即使没有 YOLO，人工饮食主链仍然可以运行。
 
 ## 手动验证 Hybrid RAG
 
@@ -365,12 +806,6 @@ BAAI/bge-small-zh-v1.5
 番茄
 ```
 
-门控策略应包含：
-
-```text
-refusal_gate:pass:exact_lexical
-```
-
 ### 人工别名
 
 查询：
@@ -379,7 +814,7 @@ refusal_gate:pass:exact_lexical
 西红柿
 ```
 
-预期召回：
+预期候选包含：
 
 ```text
 番茄
@@ -422,43 +857,71 @@ candidates = []
 一种没有具体描述的食物
 ```
 
-如果检索证据不足，系统应拒绝返回候选，不得猜测营养数值。
+如果检索证据不足，系统必须拒绝返回候选，不得猜测营养数值。
 
-## 运行自动化测试
+## 自动化测试
 
-### 单元测试
+### 全部测试
 
 ```bash
-python -m pytest -q tests/unit
+python -m pytest -q tests/unit tests/eval tests/e2e
 ```
 
-### 固定检索评测测试
+### 四类事件模型、CRUD 和汇总
+
+```bash
+python -m pytest -q \
+  tests/unit/test_health_event_models.py \
+  tests/unit/test_jsonl_store_crud.py \
+  tests/unit/test_health_event_mutation_tools.py \
+  tests/unit/test_daily_summary.py
+```
+
+### Agent Loop 和 Provider
+
+```bash
+python -m pytest -q \
+  tests/unit/test_health_agent_runner.py \
+  tests/unit/test_agent_tool_router_normalization.py \
+  tests/unit/test_openai_agent_model.py
+```
+
+### RAG 单元测试
+
+```bash
+python -m pytest -q \
+  tests/unit/test_retrieval.py \
+  tests/unit/test_hybrid_retrieval.py
+```
+
+### RAG 固定评测
 
 ```bash
 python -m pytest -q tests/eval
 ```
 
-### 核心链路 E2E
+### 人工饮食主链 E2E
 
 ```bash
 python -m pytest -q tests/e2e
 ```
 
-当前 E2E 不启动真实浏览器，主要覆盖：
+当前 E2E 不启动真实浏览器，覆盖：
 
-- 固定测试图片校验；
-- 食物别名检索；
+- 固定图片输入校验；
+- 食物检索；
+- 用户候选确认；
 - 确定性营养计算；
 - HealthEvent 构建；
 - 确认令牌；
 - 幂等保存；
 - JSONL 重新读取；
 - `not_found` 不产生营养估算；
-- 未确认时拒绝保存。
+- 未确认时拒绝写入。
 
-## 运行 RAG 评测
+## 运行 RAG 离线评测
 
-### Lexical 基线
+### Lexical
 
 ```bash
 python scripts/run_eval.py \
@@ -467,9 +930,7 @@ python scripts/run_eval.py \
   --report docs/eval_lexical.json
 ```
 
-### Hybrid RAG
-
-确保 `data/index` 已成功构建，然后执行：
+### Hybrid
 
 ```bash
 python scripts/run_eval.py \
@@ -479,26 +940,14 @@ python scripts/run_eval.py \
   --report docs/eval_hybrid.json
 ```
 
-### 验收门槛
+验收门槛：
 
 | 指标 | 门槛 |
 | --- | ---: |
-| Recall@3 | 大于或等于 0.85 |
-| Rejection Accuracy | 等于 1.0 |
-| Dense 降级次数 | 等于 0 |
+| Recall@3 | ≥ 0.85 |
+| Rejection Accuracy | = 1.0 |
+| Hybrid Dense 降级次数 | = 0 |
 | 报告 `passed` | `true` |
-
-评测集固定包含 20 条查询，覆盖：
-
-- 标准名称；
-- 人工别名；
-- 口语名称；
-- 复合菜；
-- 相似食物区分；
-- 错别字；
-- 明确拒答。
-
-评测报告是最终指标的事实来源。修改检索规则、语义提示、模型或索引后，必须重新生成报告，不能继续使用旧报告。
 
 ## 数据与索引可复现性
 
@@ -520,11 +969,11 @@ index_manifest.json
 - 文档数量；
 - Embedding 维度；
 - 文档文件 SHA-256；
-- 向量文件 SHA-256。
+-向量文件 SHA-256。
 
-运行时会检查索引和当前数据集是否匹配。
+运行时会检查索引与当前数据集是否匹配。
 
-如果食物数据或语义提示发生改变，必须重新运行：
+数据或语义提示改变后，重新执行：
 
 ```bash
 python scripts/build_food_index.py \
@@ -533,26 +982,34 @@ python scripts/build_food_index.py \
   --index-dir data/index
 ```
 
-## Dense Retrieval 降级策略
+## Dense Retrieval 降级
 
-以下情况会使 Dense Retrieval 降级：
+以下情况会导致 Dense Retrieval 不可用：
 
 - 找不到索引清单；
 - 数据集哈希不匹配；
-- 文档或向量文件缺失；
+- 索引文件缺失；
 - 文件哈希不匹配；
-- 向量维度不匹配；
+- Embedding 维度不匹配；
 - 模型无法加载。
 
-Dense 不可用时，系统回退到词法检索，但回退结果仍然必须经过拒答门控。
+Dense 不可用时，系统回退到 Lexical Retrieval。
 
-系统会在 `strategies_used` 中记录：
+降级信息记录在：
 
 ```text
-dense_unavailable:<ERROR_CODE>
+strategies_used
 ```
 
-## 数据来源与限制
+例如：
+
+```text
+dense_unavailable:DENSE_INDEX_MISSING
+```
+
+回退结果仍然必须经过拒答门控。
+
+## 数据来源
 
 公开仓库只包含：
 
@@ -560,23 +1017,23 @@ dense_unavailable:<ERROR_CODE>
 data/samples/foods_sample.json
 ```
 
-该文件包含 28 条手写示例占位数据，仅用于学习、测试和演示。
+当前共有 28 条手写示例占位记录，仅用于学习、测试和演示。
 
-数据来源字段标记为：
+示例来源字段标记为：
 
 ```text
 《中国食物成分表》第 6 版整理仓库（示例占位，仅供学习）
 ```
 
-它不是《中国食物成分表》的完整数据集，不能作为生产环境营养数据库。
+它不是《中国食物成分表》的完整数据集，不能作为生产营养数据库。
 
 完整上游数据不得提交到公开仓库。
 
-取得合法的本地数据后，可以执行：
+取得合法本地数据后，可以运行：
 
 ```bash
 python scripts/prepare_food_data.py \
-  --src <上游 JSON 目录> \
+  --src <上游JSON目录> \
   --out data/full/foods_normalized.json \
   --aliases data/aliases.json \
   --report data/full/prepare_report.json
@@ -584,9 +1041,16 @@ python scripts/prepare_food_data.py \
 
 应用按以下优先级选择食物数据：
 
-1. `FOOD_DATA_PATH` 指定的文件；
+1. `FOOD_DATA_PATH` 指定的数据；
 2. 本地 `data/full/foods_normalized.json`；
 3. 公开示例 `data/samples/foods_sample.json`。
+
+详细说明：
+
+- `docs/DATA_SOURCES.md`
+- `docs/RAG.md`
+- `docs/EVALUATION.md`
+- `docs/DECISIONS.md`
 
 ## 数据存储与隐私
 
@@ -602,26 +1066,52 @@ data/health_events.jsonl
 data/traces.jsonl
 ```
 
+当前 Agent Session 保存在进程内存中，浏览器会话结束时清理。
+
 以下内容不得提交到 GitHub：
 
 - `.env`；
+- API Key；
 - 用户健康记录；
-- 检索 Trace；
+- 运行时 Trace；
 - 用户上传图片；
 - 完整食物数据；
 - 私有原始数据；
-- 临时备份目录。
+- 临时备份文件。
 
-图片目前只用于输入校验，不会由应用复制到项目数据目录。
+项目 `.gitignore` 已排除主要运行时敏感数据。
+
+原始图片不会写入长期健康记录。
+
+## 错误处理
+
+系统为常见失败提供稳定错误语义：
+
+- Provider 认证失败；
+- Provider 超时；
+- Provider 额度不足或限流；
+- Tool 不在白名单；
+- Tool 参数非法；
+- 事件不存在；
+- 确认令牌缺失；
+- 确认令牌无效或过期；
+- 幂等键缺失；
+- 事件版本冲突；
+- JSONL 读取失败；
+- JSONL 写入失败；
+- Dense 索引不可用；
+- RAG 没有可靠候选。
+
+工具失败不得显示“保存成功”，也不得污染已保存事件。
 
 ## 健康安全边界
 
 本项目只用于：
 
 - AI 应用工程学习；
-- RAG 检索实验；
-- 软件工程作品集展示；
-- 饮食记录流程演示。
+- RAG 实验；
+- 软件工程作品集；
+- 个人健康记录流程演示。
 
 本项目不提供：
 
@@ -633,13 +1123,15 @@ data/traces.jsonl
 - 疗效保证；
 - 紧急医疗服务。
 
-页面展示的营养结果是基于固定食物数据和用户填写克重计算的估算值，仅供学习参考。
+营养结果是基于固定食物数据和用户填写份量计算的估算值。
 
-如涉及疾病、过敏、孕期、儿童、老年人、用药、进食障碍或其他高风险情况，应咨询医生、注册营养师或其他合格专业人员。
+如涉及胸痛、呼吸困难、晕厥、自伤风险、严重饮食问题、孕期、儿童、老年人、过敏、疾病或用药，应联系当地紧急服务或咨询医生、注册营养师等合格专业人员。
 
-## Trace 与可解释性
+## 可解释性
 
-每次检索 Trace 包含：
+### Retrieval Trace
+
+每次检索 Trace 可以包含：
 
 - `trace_id`；
 - 创建时间；
@@ -647,63 +1139,143 @@ data/traces.jsonl
 - 归一化查询；
 - 检索状态；
 - Top-K 候选；
-- 词法排名；
+- Lexical 排名；
 - Dense 排名；
 - Dense 相似度；
 - RRF 分数；
-- 使用的检索策略；
+- 使用策略；
 - 数据集 ID；
 - 数据记录数量；
 - 检索耗时。
 
-当前版本尚未接入 LLM Agent，因此还没有：
+### Agent 执行证据
+
+页面当前展示最近一次：
 
 - `model_rounds`；
 - `tool_steps`；
 - Agent `state`；
-- 多轮模型轨迹。
+- `pending_task`；
+- `pending_confirmation`；
+- 脱敏后的工具结果。
 
-## GitHub 最终验收清单
+完整持久化 `AgentTrace JSONL` 属于 8.29 待完成项。
 
-根据项目 PRD 的 GitHub 交付要求，提交前逐项检查：
+## 可靠性边界
 
-- [x] Python 3.11+ 和固定依赖；
+当前 JSONL 方案适用于：
+
+- 本地；
+- 单用户；
+- 单进程；
+- 小数据量；
+- 学习和演示环境。
+
+当前不支持：
+
+- 多用户登录；
+- 多进程并发写入；
+- 云端数据库；
+- 分布式事务；
+- 医疗级审计；
+- 医疗合规部署。
+
+出现多用户、并发写或复杂查询需求后，再考虑 SQLite 或 PostgreSQL。
+
+## GitHub 验收清单
+
+### 已完成
+
+- [x] Python 3.11+；
+- [x] 固定直接依赖版本；
 - [x] `python app.py` 唯一应用入口；
-- [x] 无大模型 API Key 也能启动；
-- [x] 公开示例数据；
-- [x] 数据来源和版权边界；
-- [x] Hybrid RAG 实现；
-- [x] RAG 固定评测脚本；
-- [x] Recall@3 门槛；
-- [x] 拒答准确率门槛；
-- [x] 检索 Trace；
-- [x] 核心纵向链路 E2E；
-- [x] 架构说明；
-- [x] 健康安全说明；
-- [x] 隐私与 Git 忽略规则；
-- [ ] 重新生成并确认最终 Hybrid 评测报告；
-- [ ] GitHub Actions CI；
-- [ ] 浏览器级 E2E；
-- [ ] 四类 HealthEvent 的完整 CRUD；
-- [ ] `model_rounds`、`tool_steps` 和 Agent `state`；
-- [ ] P1 目标、记忆、check-in 和周期报告。
+- [x] 无 LLM API Key 时页面仍可启动；
+- [x] `.env.example` 不包含真实 Key；
+- [x] 公开示例食物数据；
+- [x] 数据来源和版权边界说明；
+- [x] 人工饮食主链；
+- [x] Hybrid RAG；
+- [x] 固定 20 条检索评测；
+- [x] Recall@3 ≥ 85%；
+- [x] Rejection Accuracy = 100%；
+- [x] Dense 无降级的 Hybrid 评测报告；
+- [x] 检索拒答门控；
+- [x] 确定性营养计算；
+- [x] 四类 HealthEvent 模型；
+- [x] 四类事件保存；
+- [x] 四类事件查询；
+- [x] 四类事件修改；
+- [x] 四类事件删除；
+- [x] 保存、修改和删除前确认；
+- [x] 幂等保存、修改和删除；
+- [x] 有限轮次 Agent Loop；
+- [x] Tool 白名单和参数校验；
+- [x] `model_rounds`、`tool_steps` 和 Agent `state`；
+- [x] 健康安全边界；
+- [x] 隐私和 Git 忽略规则；
+- [x] 核心人工饮食 E2E。
 
-未完成项必须如实保留，不能为了展示效果标记为已完成。
+### 进行中或未完成
+
+- [ ] 8.29 健康时间线联合验收；
+- [ ] 8.29 每日汇总联合验收；
+- [ ] 多轮补参完整验收；
+- [ ] AgentTrace JSONL；
+- [ ] 至少 8 条完整流程 E2E；
+- [ ] 浏览器级 E2E；
+- [ ] GitHub Actions CI；
+- [ ] 至少 10 张固定验收图片；
+- [ ] 真实 YOLO 冒烟与失败回退；
+- [ ] 由未参与开发的人完成十分钟启动验证；
+- [ ] `docs/ARCHITECTURE.md`；
+- [ ] P1 档案、目标、记忆和 check-in；
+- [ ] 外部 Provider 行动适配器。
+
+未完成项必须如实保留，不能为了演示效果标记为完成。
 
 ## 已知限制
 
-- 图片暂不进行食物识别；
 - 当前食物库只有 28 条示例数据；
-- 自然语言描述的效果依赖语义提示覆盖范围；
-- Dense 模型第一次运行需要下载；
-- 本地 JSONL 存储只适合单进程学习项目；
+- 图片目前不执行真实食物识别；
+- 餐食隐藏油、糖、调味料和混合配方无法仅凭图片准确确定；
+- Dense 模型首次使用可能需要网络下载；
+- Agent 效果受到所配置 Provider 的 Tool Calling 能力影响；
+- Agent Session 尚未持久化；
+- AgentTrace JSONL 尚未完成；
+- JSONL 存储只适用于本地单进程；
 - 没有用户登录和权限隔离；
 - 没有云端数据库；
-- 没有完整 Agent Loop；
-- 没有医疗审核能力。
+- 没有医疗审核能力；
+- 不适合处理紧急或高风险医疗问题。
+
+## 后续计划
+
+### 8.29
+
+- 验收健康时间线；
+- 验收每日汇总；
+- 验收缺参追问和 pending task；
+- 持久化 Agent Trace；
+- 补齐失败流程 E2E。
+
+### 8.30
+
+- 不加载 YOLO，现场运行人工饮食主链；
+- 四类健康事件各完成一条；
+- 展示成功 Trace 和失败回滚；
+- 汇总完成项、限制和阻塞点。
+
+### 后续 P1
+
+核心 P0 稳定后，最多选择两项：
+
+- 用户档案与健康目标；
+- 教练式周期复盘；
+- YOLO 食物候选预填；
+- 一个外部系统的授权交互。
 
 ## License
 
 本项目使用 MIT License。
 
-第三方数据和模型仍受各自许可证、使用条款及版权要求约束。
+第三方数据、模型和 API Provider 仍受各自许可证、服务条款和版权要求约束。
