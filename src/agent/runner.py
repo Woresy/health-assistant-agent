@@ -25,19 +25,145 @@ from src.agent.tool_router import (
 SYSTEM_PROMPT = """
 你是个人健康管理助理 Agent。
 
-你只能协助记录饮食、饮水、体重和运动，
-查询健康时间线以及生成确定性每日汇总。
+你只能协助：
+- 记录饮食、饮水、体重和运动；
+- 查询健康时间线；
+- 生成确定性每日汇总；
+- 生成健康事件修改或删除草稿。
 
 规则：
 1. 不做诊断，不替代医生，不夸大健康结论。
-2. 模型只能提出工具调用，不能声称工具已经成功。
-3. 保存、修改和删除必须先生成草稿。
-4. 草稿生成后必须等待用户明确确认。
-5. 不得调用工具白名单以外的函数。
-6. 缺少必填参数时必须追问，不能猜测。
-7. 每日汇总必须读取已保存事件。
-8. 饮食营养值必须来自检索和确定性计算。
+2. 记录健康事件必须调用 prepare_health_event。
+3. 查询健康事件必须调用 query_health_events。
+4. 每日汇总必须调用 get_daily_health_summary。
+5. 修改健康事件必须调用 prepare_update_health_event。
+6. 删除健康事件必须调用 prepare_delete_health_event。
+7. 不能只用文本声称已经生成草稿或已经调用工具。
+8. 保存、修改和删除必须先生成草稿。
+9. 草稿生成后必须等待用户明确确认。
+10. 不得调用工具白名单以外的函数。
+11. 缺少必填参数时应提出工具调用，由工具校验生成追问。
+12. occurred_at 是可选参数；用户未说明时间时省略它，由程序使用当前时间。
+13. 每日汇总必须读取已保存事件。
+14. 饮食营养值必须来自检索和确定性计算。
+15. 只有工具真正返回草稿后，才能告诉用户等待确认。
 """.strip()
+
+
+_TOOL_ACTION_TERMS = (
+    "记录",
+    "记一下",
+    "录入",
+    "保存",
+    "新增",
+    "添加",
+    "修改",
+    "更新",
+    "改成",
+    "改为",
+    "删除",
+    "移除",
+    "查询",
+    "查一下",
+    "查看",
+    "时间线",
+    "汇总",
+    "统计",
+    "多少",
+)
+
+_HEALTH_DOMAIN_TERMS = (
+    "饮食",
+    "吃饭",
+    "早餐",
+    "午餐",
+    "晚餐",
+    "食物",
+    "喝水",
+    "饮水",
+    "毫升",
+    "体重",
+    "公斤",
+    "千克",
+    "运动",
+    "跑步",
+    "步行",
+    "公里",
+    "分钟",
+    "健康记录",
+    "健康事件",
+    "事件",
+)
+
+_IMPLICIT_RECORD_TERMS = (
+    "喝了",
+    "吃了",
+    "跑步了",
+    "运动了",
+    "步行了",
+    "走了",
+    "称重",
+)
+
+TOOL_REQUIRED_RETRY_PROMPT = """
+上一条响应没有调用工具，因此不能作为有效结果。
+当前用户请求涉及健康事件的记录、查询、修改、删除或汇总。
+你必须调用匹配的白名单工具。
+不要通过普通文本声称已经生成草稿或已经保存。
+如果缺少必填参数，也应提出工具调用，由工具校验生成追问。
+""".strip()
+
+
+def _requires_health_tool(
+    user_text: str,
+) -> bool:
+    """判断当前用户输入是否必须经过健康工具。"""
+
+    normalized_text = (
+        user_text.strip()
+        .casefold()
+    )
+
+    if not normalized_text:
+        return False
+
+    has_action_term = any(
+        term in normalized_text
+        for term in _TOOL_ACTION_TERMS
+    )
+    has_health_term = any(
+        term in normalized_text
+        for term in _HEALTH_DOMAIN_TERMS
+    )
+
+    if has_action_term and has_health_term:
+        return True
+
+    if any(
+        term in normalized_text
+        for term in _IMPLICIT_RECORD_TERMS
+    ):
+        return True
+
+    has_number = any(
+        character.isdigit()
+        for character in normalized_text
+    )
+    has_health_unit = any(
+        unit in normalized_text
+        for unit in (
+            "毫升",
+            "ml",
+            "公斤",
+            "kg",
+            "千克",
+            "分钟",
+            "公里",
+            "km",
+        )
+    )
+
+    return has_number and has_health_unit
 
 
 def _redact_result(
@@ -353,6 +479,53 @@ class AgentRunner:
                 answer = (
                     reply.content.strip()
                 )
+
+                requires_tool = (
+                    pending_task
+                    is not None
+                    or (
+                        not tool_steps
+                        and _requires_health_tool(
+                            normalized_text
+                        )
+                    )
+                )
+
+                if requires_tool:
+                    if (
+                        model_round
+                        < self._max_model_rounds
+                    ):
+                        messages.append(
+                            AgentMessage(
+                                role="system",
+                                content=(
+                                    TOOL_REQUIRED_RETRY_PROMPT
+                                ),
+                            )
+                        )
+
+                        continue
+
+                    return self._failed_outcome(
+                        session_state=(
+                            session_state
+                        ),
+                        messages=messages,
+                        answer=(
+                            "模型没有按照协议调用"
+                            "健康工具，本轮操作已终止。"
+                            "没有写入或修改健康记录。"
+                        ),
+                        finish_reason=(
+                            AgentFinishReason
+                            .TOOL_ERROR
+                        ),
+                        model_rounds=(
+                            model_round
+                        ),
+                        tool_steps=tool_steps,
+                    )
 
                 messages.append(
                     AgentMessage(

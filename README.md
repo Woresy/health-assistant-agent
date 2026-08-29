@@ -10,12 +10,12 @@
 
 ## 当前进度
 
-截至 2026-08-29：
+截至 2026-08-30：
 
 - 8.26：完成图片输入、人工食物候选、营养计算、确认和饮食保存主链；
 - 8.27：完成食物数据准备、Hybrid RAG、拒答门控和固定检索评测；
 - 8.28：完成饮食、饮水、体重、运动四类健康事件的保存、查询、修改和删除；
-- 8.29：正在验收健康时间线、每日汇总、多轮补参、Agent Trace 和失败 E2E。
+- 8.29：完成健康时间线、每日汇总、多轮补参、脱敏 Agent Trace 和失败 E2E。
 
 ### 功能状态
 
@@ -35,12 +35,12 @@
 | 四类事件删除 | 已完成 | 先展示目标，确认后删除 |
 | LLM Agent Loop | 已完成 | 有限模型轮次、工具白名单和 Tool Result 回传 |
 | OpenAI-compatible Provider | 已完成 | 支持配置 DeepSeek 等兼容 Chat Completions Tools 的 Provider |
-| pending task | 已实现，验收中 | 缺少必填参数时暂存任务并继续补充 |
-| 健康时间线 | 已实现，验收中 | 从已保存事件读取并展示 |
-| 每日汇总 | 已实现，验收中 | 汇总只读取 committed events |
-| Agent 执行证据 | 部分完成 | 页面展示最新 `model_rounds`、`tool_steps` 和 `state` |
-| AgentTrace JSONL | 未完成 | 当前 Agent Session 和最新证据主要保存在内存 |
-| 失败流程 E2E | 部分完成 | 已有失败单元测试，仍需补齐阶段 E2E |
+| pending task | 已完成 | 缺少必填参数时暂存任务并在下一轮合并参数 |
+| 健康时间线 | 已完成 | 按用户、日期和类型读取已保存事件 |
+| 每日汇总 | 已完成 | 确定性汇总只读取 committed events |
+| Agent 执行证据 | 已完成 | 页面展示脱敏 `model_rounds`、`tool_steps`、`state` 和 pending 状态 |
+| AgentTrace JSONL | 已完成 | 发送、确认和取消会脱敏写入 `data/agent_traces.jsonl` |
+| 失败流程 E2E | 已完成 | 9 条 E2E 覆盖成功、缺参、取消、非法参数、白名单和 Trace 失败 |
 | 图片食物识别 | 未完成 | 尚未接入真实 YOLO 权重 |
 | GitHub Actions CI | 未完成 | 最终验收前补充 |
 | P1 目标、记忆和 check-in | 未完成 | 不属于当前 P0 阶段 |
@@ -93,6 +93,23 @@ HealthEvent
 ```
 
 模型只能提出操作，不能绕过确认直接写入数据。
+
+## 8.29 完成结果
+
+8.29 阶段目标已完成：
+
+> 完成健康时间线、每日确定性汇总、多轮缺参追问、脱敏 Agent Trace，以及失败不落数据的 E2E 验收。
+
+验收结果：
+
+- 健康时间线只读取已保存事件，支持日期和事件类型过滤；
+- 每日汇总对饮食、饮水、体重和运动执行确定性聚合；
+- `pending_task` 保存已知参数，下一轮补充缺失参数；
+- Agent 发送、确认和取消都会写入脱敏 Trace；
+- Agent Trace 不保存原始对话、健康参数值或确认令牌；
+- 模型不能仅通过文本假装生成草稿，明确健康意图必须调用工具；
+- 非法参数、未知工具、用户取消和 Trace 写入失败均有固定测试；
+- E2E 测试共 9 条，满足“至少 8 条完整流程”要求。
 
 ## 核心设计原则
 
@@ -917,7 +934,16 @@ python -m pytest -q tests/e2e
 - 幂等保存；
 - JSONL 重新读取；
 - `not_found` 不产生营养估算；
-- 未确认时拒绝写入。
+- 未确认时拒绝写入；
+- 饮水草稿、确认和保存；
+- 体重查询不修改数据；
+- 运动缺参、补参和取消；
+- 未知工具和非法参数失败不落数据；
+- 待确认期间阻止新的写请求；
+- 删除草稿取消后保留原事件；
+- Agent Trace 写入失败不影响健康事件保存。
+
+当前共 9 条 E2E，满足 PRD “至少 8 条完整流程”的要求。
 
 ## 运行 RAG 离线评测
 
@@ -1159,7 +1185,13 @@ data/traces.jsonl
 - `pending_confirmation`；
 - 脱敏后的工具结果。
 
-完整持久化 `AgentTrace JSONL` 属于 8.29 待完成项。
+发送消息、确认操作和取消操作会将脱敏 `AgentTrace` 持久化到：
+
+```text
+data/agent_traces.jsonl
+```
+
+Trace 仅保留会话和用户哈希、输入长度和哈希、状态、模型轮数、工具名称、参数名称和错误码，不保留原始对话或健康参数值。
 
 ## 可靠性边界
 
@@ -1211,17 +1243,19 @@ data/traces.jsonl
 - [x] 有限轮次 Agent Loop；
 - [x] Tool 白名单和参数校验；
 - [x] `model_rounds`、`tool_steps` 和 Agent `state`；
+- [x] 健康时间线联合验收；
+- [x] 每日确定性汇总联合验收；
+- [x] 多轮缺参追问和 `pending_task`；
+- [x] 脱敏 `AgentTrace JSONL`；
+- [x] 9 条完整流程 E2E；
+- [x] 失败不落数据和 Trace 失败隔离；
+- [x] 明确健康意图的工具强制调用门控；
 - [x] 健康安全边界；
 - [x] 隐私和 Git 忽略规则；
 - [x] 核心人工饮食 E2E。
 
 ### 进行中或未完成
 
-- [ ] 8.29 健康时间线联合验收；
-- [ ] 8.29 每日汇总联合验收；
-- [ ] 多轮补参完整验收；
-- [ ] AgentTrace JSONL；
-- [ ] 至少 8 条完整流程 E2E；
 - [ ] 浏览器级 E2E；
 - [ ] GitHub Actions CI；
 - [ ] 至少 10 张固定验收图片；
@@ -1240,8 +1274,8 @@ data/traces.jsonl
 - 餐食隐藏油、糖、调味料和混合配方无法仅凭图片准确确定；
 - Dense 模型首次使用可能需要网络下载；
 - Agent 效果受到所配置 Provider 的 Tool Calling 能力影响；
+- Provider 未调用必需工具时，Agent Runner 会在有限轮次内重试，仍失败则拒绝写入；
 - Agent Session 尚未持久化；
-- AgentTrace JSONL 尚未完成；
 - JSONL 存储只适用于本地单进程；
 - 没有用户登录和权限隔离；
 - 没有云端数据库；
@@ -1252,11 +1286,11 @@ data/traces.jsonl
 
 ### 8.29
 
-- 验收健康时间线；
-- 验收每日汇总；
-- 验收缺参追问和 pending task；
-- 持久化 Agent Trace；
-- 补齐失败流程 E2E。
+- [x] 验收健康时间线；
+- [x] 验收每日汇总；
+- [x] 验收缺参追问和 pending task；
+- [x] 持久化脱敏 Agent Trace；
+- [x] 补齐失败流程 E2E。
 
 ### 8.30
 

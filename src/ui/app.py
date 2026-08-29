@@ -2,27 +2,18 @@
 
 from __future__ import annotations
 
-import json
 import os
-from datetime import (
-    datetime,
-    timezone,
-)
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
 from uuid import uuid4
-from zoneinfo import (
-    ZoneInfo,
-    ZoneInfoNotFoundError,
-)
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import gradio as gr
 from dotenv import load_dotenv
 
-from src.agent.models import (
-    AgentRunResult,
-)
+from src.agent.models import AgentRunResult
 from src.agent.openai_model import (
     AgentConfigurationError,
     AgentProviderError,
@@ -32,8 +23,12 @@ from src.agent.runner import (
     AgentRunner,
     ConversationSession,
 )
-from src.agent.tool_router import (
-    HealthToolRouter,
+from src.agent.tool_router import HealthToolRouter
+from src.agent.trace import (
+    AgentTraceReadError,
+    AgentTraceStore,
+    DEFAULT_AGENT_TRACE_PATH,
+    TracedConversationSession,
 )
 from src.health.models import (
     ExercisePayload,
@@ -51,9 +46,7 @@ from src.nutrition.repository import (
     FoodRepository,
     NutritionDataError,
 )
-from src.storage.jsonl_store import (
-    HealthEventStore,
-)
+from src.storage.jsonl_store import HealthEventStore
 from src.tools.get_daily_health_summary import (
     get_daily_health_summary,
 )
@@ -69,15 +62,10 @@ from src.tools.retrieve_nutrition_candidates import (
 from src.tools.save_health_event import (
     save_health_event,
 )
-from src.ui.image_input import (
-    validate_image,
-)
+from src.ui.image_input import validate_image
 
 
-PROJECT_ROOT = (
-    Path(__file__).resolve()
-    .parents[2]
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 load_dotenv(
     PROJECT_ROOT / ".env",
@@ -90,29 +78,34 @@ EVENTS_PATH = (
     / "health_events.jsonl"
 )
 
-LOCAL_USER_ID = (
-    "local-demo-user"
-)
+LOCAL_USER_ID = "local-demo-user"
+
 APP_TIMEZONE = os.getenv(
     "APP_TIMEZONE",
     "Asia/Shanghai",
 ).strip()
 
+
 repository = FoodRepository()
+
 event_store = HealthEventStore(
     EVENTS_PATH
 )
+
 tool_router = HealthToolRouter(
     event_store
 )
+
+agent_trace_store = AgentTraceStore(
+    DEFAULT_AGENT_TRACE_PATH
+)
+
 
 try:
     (
         agent_model,
         AGENT_PROVIDER_STATUS,
-    ) = (
-        create_agent_model_from_environment()
-    )
+    ) = create_agent_model_from_environment()
 except AgentConfigurationError as exc:
     agent_model = None
     AGENT_PROVIDER_STATUS = (
@@ -120,10 +113,12 @@ except AgentConfigurationError as exc:
         f"{exc}"
     )
 
+
 _AGENT_SESSIONS: dict[
     str,
-    ConversationSession,
+    TracedConversationSession,
 ] = {}
+
 _AGENT_SESSIONS_LOCK = RLock()
 
 
@@ -131,7 +126,7 @@ def _error_text(
     error_code: str,
     message: str,
 ) -> str:
-    """生成 UI 错误文本。"""
+    """生成统一的 UI 错误文本。"""
 
     return (
         f"错误 [{error_code}]："
@@ -139,8 +134,7 @@ def _error_text(
     )
 
 
-def _timezone(
-) -> ZoneInfo:
+def _timezone() -> ZoneInfo:
     """取得应用时区。"""
 
     try:
@@ -181,10 +175,7 @@ def _session_key(
     )
 
     if (
-        isinstance(
-            session_hash,
-            str,
-        )
+        isinstance(session_hash, str)
         and session_hash.strip()
     ):
         return session_hash.strip()
@@ -194,8 +185,8 @@ def _session_key(
 
 def _get_agent_session(
     request: gr.Request,
-) -> ConversationSession | None:
-    """按浏览器会话取得独立 Agent Session。"""
+) -> TracedConversationSession | None:
+    """按浏览器会话获取带 Trace 的 Agent Session。"""
 
     if agent_model is None:
         return None
@@ -205,10 +196,8 @@ def _get_agent_session(
     )
 
     with _AGENT_SESSIONS_LOCK:
-        existing = (
-            _AGENT_SESSIONS.get(
-                key
-            )
+        existing = _AGENT_SESSIONS.get(
+            key
         )
 
         if existing is not None:
@@ -220,22 +209,15 @@ def _get_agent_session(
             max_model_rounds=4,
         )
 
-        session = (
-            ConversationSession(
-                runner=runner,
-                session_id=key,
-                user_id=(
-                    LOCAL_USER_ID
-                ),
-                timezone_name=(
-                    APP_TIMEZONE
-                ),
-            )
+        session = TracedConversationSession(
+            runner=runner,
+            session_id=key,
+            user_id=LOCAL_USER_ID,
+            timezone_name=APP_TIMEZONE,
+            trace_store=agent_trace_store,
         )
 
-        _AGENT_SESSIONS[
-            key
-        ] = session
+        _AGENT_SESSIONS[key] = session
 
         return session
 
@@ -261,14 +243,20 @@ def _result_state_json(
     session: ConversationSession,
     result: AgentRunResult,
 ) -> dict[str, Any]:
-    """生成不包含确认令牌的状态证据。"""
+    """生成不包含健康参数和确认令牌的状态证据。"""
 
     pending_task = (
         session.state.pending_task
     )
+
     pending_confirmation = (
-        session.state
-        .pending_confirmation
+        session.state.pending_confirmation
+    )
+
+    trace_warning = getattr(
+        session,
+        "last_trace_warning",
+        None,
     )
 
     return {
@@ -295,53 +283,145 @@ def _result_state_json(
                 "tool_name": (
                     pending_task.tool_name
                 ),
-                "known_arguments": (
-                    pending_task.arguments
+                "known_argument_names": sorted(
+                    pending_task.arguments.keys()
                 ),
                 "missing_parameters": (
-                    pending_task
-                    .missing_parameters
+                    pending_task.missing_parameters
                 ),
                 "question": (
                     pending_task.question
                 ),
             }
-            if pending_task
-            is not None
+            if pending_task is not None
             else None
         ),
         "pending_confirmation": (
             {
                 "action": (
-                    pending_confirmation
-                    .action
+                    pending_confirmation.action
                 ),
                 "tool_name": (
-                    pending_confirmation
-                    .tool_name
+                    pending_confirmation.tool_name
                 ),
                 "confirmation_token": (
                     "***redacted***"
                 ),
             }
-            if pending_confirmation
-            is not None
+            if pending_confirmation is not None
             else None
         ),
+        "trace": {
+            "enabled": True,
+            "path": (
+                "data/agent_traces.jsonl"
+            ),
+            "write_warning": (
+                trace_warning
+            ),
+        },
     }
 
 
 def _tool_steps_json(
     result: AgentRunResult,
 ) -> list[dict[str, Any]]:
-    """序列化已脱敏的工具步骤。"""
+    """将工具步骤转换为脱敏的开发者证据。"""
+
+    safe_steps: list[
+        dict[str, Any]
+    ] = []
+
+    for step in result.tool_steps:
+        raw_ok = step.result.get(
+            "ok"
+        )
+
+        ok = (
+            raw_ok
+            if isinstance(raw_ok, bool)
+            else None
+        )
+
+        error_code: str | None = None
+
+        raw_error = step.result.get(
+            "error"
+        )
+
+        if isinstance(raw_error, dict):
+            raw_code = raw_error.get(
+                "code"
+            )
+
+            if isinstance(raw_code, str):
+                error_code = raw_code
+
+        safe_steps.append(
+            {
+                "call_id": (
+                    step.call_id
+                ),
+                "tool_name": (
+                    step.tool_name
+                ),
+                "argument_names": sorted(
+                    step.arguments.keys()
+                ),
+                "ok": ok,
+                "error_code": error_code,
+            }
+        )
+
+    return safe_steps
+
+
+def refresh_agent_traces(
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """读取最近的脱敏 Agent Trace。"""
+
+    try:
+        traces = (
+            agent_trace_store
+            .read_recent(
+                limit=limit
+            )
+        )
+    except AgentTraceReadError as exc:
+        return [
+            {
+                "ok": False,
+                "error": {
+                    "code": (
+                        exc.error_code
+                    ),
+                    "message": str(
+                        exc
+                    ),
+                },
+            }
+        ]
+    except ValueError as exc:
+        return [
+            {
+                "ok": False,
+                "error": {
+                    "code": (
+                        "INVALID_TRACE_LIMIT"
+                    ),
+                    "message": str(
+                        exc
+                    ),
+                },
+            }
+        ]
 
     return [
-        step.model_dump(
+        trace.model_dump(
             mode="json"
         )
-        for step
-        in result.tool_steps
+        for trace in traces
     ]
 
 
@@ -398,20 +478,14 @@ def _event_detail(
             f"{payload.duration_minutes:g}分钟"
         )
 
-        if (
-            payload.distance_km
-            is not None
-        ):
+        if payload.distance_km is not None:
             details += (
                 f"，{payload.distance_km:g}km"
             )
 
-        if (
-            payload.intensity
-            is not None
-        ):
+        if payload.intensity is not None:
             details += (
-                f"，强度："
+                "，强度："
                 f"{payload.intensity.value}"
             )
 
@@ -430,12 +504,13 @@ def _timeline_rows(
         dict[str, Any]
     ],
 ) -> list[list[Any]]:
-    """将工具返回事件转为表格行。"""
+    """将工具返回事件转换为表格行。"""
 
-    local_timezone = (
-        _timezone()
-    )
-    rows: list[list[Any]] = []
+    local_timezone = _timezone()
+
+    rows: list[
+        list[Any]
+    ] = []
 
     for raw_event in events:
         event = (
@@ -459,7 +534,9 @@ def _timeline_rows(
                     )
                 ),
                 event.event_type.value,
-                _event_detail(event),
+                _event_detail(
+                    event
+                ),
                 event.input_source.value,
                 (
                     event.updated_at
@@ -480,20 +557,16 @@ def _timeline_rows(
 def _summary_markdown(
     summary: dict[str, Any],
 ) -> str:
-    """将每日汇总转为 Markdown。"""
+    """将每日汇总转换为 Markdown。"""
 
     meal = summary["meal"]
     water = summary["water"]
     weight = summary["weight"]
-    exercise = summary[
-        "exercise"
-    ]
+    exercise = summary["exercise"]
 
     latest_weight = (
         f"{weight['latest_weight_kg']:g} kg"
-        if weight[
-            "latest_weight_kg"
-        ]
+        if weight["latest_weight_kg"]
         is not None
         else "无记录"
     )
@@ -520,8 +593,7 @@ def _summary_markdown(
     )
 
 
-def refresh_today(
-) -> tuple[
+def refresh_today() -> tuple[
     list[list[Any]],
     str,
 ]:
@@ -538,15 +610,11 @@ def refresh_today(
             ),
         )
 
-    result = (
-        get_daily_health_summary(
-            user_id=LOCAL_USER_ID,
-            date=today,
-            timezone_name=(
-                APP_TIMEZONE
-            ),
-            store=event_store,
-        )
+    result = get_daily_health_summary(
+        user_id=LOCAL_USER_ID,
+        date=today,
+        timezone_name=APP_TIMEZONE,
+        store=event_store,
     )
 
     if not result["ok"]:
@@ -579,7 +647,7 @@ def refresh_timeline(
     list[list[Any]],
     str,
 ]:
-    """按日期和类型刷新完整时间线。"""
+    """按日期和事件类型刷新时间线。"""
 
     selected_date = (
         date_value.strip()
@@ -673,9 +741,10 @@ def search_candidates(
             ),
             [],
             _error_text(
-                image_result
-                .error_code
-                or "IMAGE_INVALID",
+                (
+                    image_result.error_code
+                    or "IMAGE_INVALID"
+                ),
                 image_result.message,
             ),
             {},
@@ -690,9 +759,7 @@ def search_candidates(
     )
 
     if not tool_result["ok"]:
-        error = tool_result[
-            "error"
-        ]
+        error = tool_result["error"]
 
         return (
             gr.Dropdown(
@@ -710,10 +777,7 @@ def search_candidates(
     data = tool_result["data"]
     trace = data["trace"]
 
-    if (
-        data["status"]
-        == "not_found"
-    ):
+    if data["status"] == "not_found":
         return (
             gr.Dropdown(
                 choices=[],
@@ -731,11 +795,12 @@ def search_candidates(
     choices: list[
         tuple[str, str]
     ] = []
-    rows: list[list[Any]] = []
 
-    for candidate in (
-        data["candidates"]
-    ):
+    rows: list[
+        list[Any]
+    ] = []
+
+    for candidate in data["candidates"]:
         choices.append(
             (
                 f"{candidate['name']}｜"
@@ -752,42 +817,26 @@ def search_candidates(
                 candidate["name"],
                 candidate["category"],
                 candidate["stage"],
-                candidate[
-                    "match_type"
-                ],
-                candidate[
-                    "matched_term"
-                ],
+                candidate["match_type"],
+                candidate["matched_term"],
                 candidate["score"],
                 candidate["source"],
-                candidate[
-                    "source_version"
-                ],
-                candidate[
-                    "candidate_source"
-                ],
+                candidate["source_version"],
+                candidate["candidate_source"],
             ]
         )
 
     selected_value = (
-        data["candidates"][0][
-            "food_id"
-        ]
-        if data[
-            "auto_select_allowed"
-        ]
+        data["candidates"][0]["food_id"]
+        if data["auto_select_allowed"]
         else None
     )
 
     warning_text = ""
 
-    if (
-        data["trace_warning"]
-        is not None
-    ):
-        warning = data[
-            "trace_warning"
-        ]
+    if data["trace_warning"] is not None:
+        warning = data["trace_warning"]
+
         warning_text = (
             "\n\nTrace 警告 "
             f"[{warning['error_code']}]："
@@ -796,7 +845,7 @@ def search_candidates(
 
     status = (
         f"已加载 {len(rows)} 个候选。"
-        f"归一化检索词："
+        "归一化检索词："
         f"`{data['normalized_query']}`；"
         f"模式：`{data['selection_mode']}`；"
         f"数据集：`{data['dataset_id']}`；"
@@ -823,10 +872,7 @@ def search_candidates(
 def calculate_meal_preview(
     image_path: str | None,
     food_query: str,
-    selected_food_id: (
-        str
-        | None
-    ),
+    selected_food_id: str | None,
     raw_grams: Any,
 ) -> tuple[
     str,
@@ -843,9 +889,10 @@ def calculate_meal_preview(
     if not image_result.ok:
         return (
             _error_text(
-                image_result
-                .error_code
-                or "IMAGE_INVALID",
+                (
+                    image_result.error_code
+                    or "IMAGE_INVALID"
+                ),
                 image_result.message,
             ),
             None,
@@ -854,22 +901,17 @@ def calculate_meal_preview(
         )
 
     try:
-        search_result = (
-            repository.search(
-                food_query,
-                top_k=5,
-            )
+        search_result = repository.search(
+            food_query,
+            top_k=5,
         )
 
-        if (
-            search_result.status
-            == "not_found"
-        ):
+        if search_result.status == "not_found":
             return (
                 _error_text(
                     "NOT_FOUND",
                     "没有可靠食物数据，"
-                    "不能计算或保存",
+                    "不能计算或保存。",
                 ),
                 None,
                 "",
@@ -891,33 +933,27 @@ def calculate_meal_preview(
                 _error_text(
                     "CANDIDATE_REQUIRED",
                     "请选择当前检索结果"
-                    "中的一个候选",
+                    "中的一个候选。",
                 ),
                 None,
                 "",
                 "",
             )
 
-        food = (
-            repository
-            .get_by_food_id(
-                selected_food_id
-            )
+        food = repository.get_by_food_id(
+            selected_food_id
         )
 
         grams = parse_grams(
             raw_grams
         )
 
-        estimate = (
-            calculate_nutrition(
-                food=food,
-                raw_grams=grams,
-                retrieval_query=(
-                    food_query
-                ),
-            )
+        estimate = calculate_nutrition(
+            food=food,
+            raw_grams=grams,
+            retrieval_query=food_query,
         )
+
     except NutritionDataError as exc:
         return (
             _error_text(
@@ -928,9 +964,8 @@ def calculate_meal_preview(
             "",
             "",
         )
-    except (
-        NutritionCalculationError
-    ) as exc:
+
+    except NutritionCalculationError as exc:
         return (
             _error_text(
                 exc.error_code,
@@ -945,62 +980,57 @@ def calculate_meal_preview(
         timezone.utc
     )
 
-    draft_result = (
-        prepare_health_event(
-            event_input={
-                "event_type": "meal",
-                "payload": {
-                    "food": {
-                        "food_id": (
-                            food.food_id
-                        ),
-                        "name": food.name,
-                        "category": (
-                            food.category
-                        ),
-                    },
-                    "portion": {
-                        "grams": (
-                            float(grams)
-                        ),
-                        "unit": "g",
-                    },
-                    "nutrition": (
-                        estimate
-                        .model_dump(
-                            mode="json"
-                        )
+    draft_result = prepare_health_event(
+        event_input={
+            "event_type": "meal",
+            "payload": {
+                "food": {
+                    "food_id": (
+                        food.food_id
                     ),
-                    "retrieval_query": (
-                        food_query.strip()
+                    "name": (
+                        food.name
                     ),
-                    "candidate_source": (
-                        "manual"
+                    "category": (
+                        food.category
                     ),
-                    "estimated": True,
                 },
-                "source_refs": [
-                    estimate.source_ref
-                ],
-                "input_source": (
-                    "image"
+                "portion": {
+                    "grams": (
+                        float(grams)
+                    ),
+                    "unit": "g",
+                },
+                "nutrition": (
+                    estimate.model_dump(
+                        mode="json"
+                    )
                 ),
-                "occurred_at": (
-                    now.isoformat()
+                "retrieval_query": (
+                    food_query.strip()
                 ),
+                "candidate_source": (
+                    "manual"
+                ),
+                "estimated": True,
             },
-            user_id=LOCAL_USER_ID,
-            idempotency_key=str(
-                uuid4()
+            "source_refs": [
+                estimate.source_ref
+            ],
+            "input_source": "image",
+            "occurred_at": (
+                now.isoformat()
             ),
-            now=now,
-        )
+        },
+        user_id=LOCAL_USER_ID,
+        idempotency_key=str(
+            uuid4()
+        ),
+        now=now,
     )
 
     if not draft_result["ok"]:
-        error = draft_result[
-            "error"
-        ]
+        error = draft_result["error"]
 
         return (
             _error_text(
@@ -1012,9 +1042,7 @@ def calculate_meal_preview(
             "",
         )
 
-    preview_state = (
-        draft_result["data"]
-    )
+    preview_state = draft_result["data"]
 
     summary = (
         "### 待确认饮食记录\n\n"
@@ -1078,16 +1106,13 @@ def confirm_meal_save(
     """明确点击后保存饮食草稿。"""
 
     if not preview_state:
-        (
-            rows,
-            summary,
-        ) = refresh_today()
+        rows, summary = refresh_today()
 
         return (
             _error_text(
                 "PREVIEW_REQUIRED",
                 "请先完成检索和"
-                "营养计算",
+                "营养计算。",
             ),
             rows,
             summary,
@@ -1110,10 +1135,7 @@ def confirm_meal_save(
         store=event_store,
     )
 
-    (
-        rows,
-        summary,
-    ) = refresh_today()
+    rows, summary = refresh_today()
 
     if not result["ok"]:
         error = result["error"]
@@ -1127,9 +1149,7 @@ def confirm_meal_save(
             summary,
         )
 
-    if result["data"][
-        "idempotent"
-    ]:
+    if result["data"]["idempotent"]:
         status = (
             "该饮食草稿已保存过，"
             "没有新增重复记录。"
@@ -1147,8 +1167,7 @@ def confirm_meal_save(
     )
 
 
-def cancel_meal_preview(
-) -> tuple[
+def cancel_meal_preview() -> tuple[
     None,
     str,
     str,
@@ -1162,9 +1181,7 @@ def cancel_meal_preview(
             "已取消，未写入"
             "任何饮食记录。"
         ),
-        (
-            "尚未计算待确认记录。"
-        ),
+        "尚未计算待确认记录。",
         (
             "### 可重算证据\n\n"
             "尚未选择数据行并计算。"
@@ -1186,7 +1203,7 @@ def send_chat_message(
     list[dict[str, Any]],
     dict[str, Any],
 ]:
-    """向当前浏览器的 Agent Session 发消息。"""
+    """向当前浏览器的 Agent Session 发送消息。"""
 
     chat_history = list(
         history or []
@@ -1213,9 +1230,7 @@ def send_chat_message(
     chat_history.append(
         {
             "role": "user",
-            "content": (
-                normalized_text
-            ),
+            "content": normalized_text,
         }
     )
 
@@ -1233,9 +1248,7 @@ def send_chat_message(
 
         chat_history.append(
             {
-                "role": (
-                    "assistant"
-                ),
+                "role": "assistant",
                 "content": answer,
             }
         )
@@ -1256,6 +1269,7 @@ def send_chat_message(
         result = session.send(
             normalized_text
         )
+
     except AgentProviderError as exc:
         answer = (
             "模型调用失败："
@@ -1264,9 +1278,7 @@ def send_chat_message(
 
         chat_history.append(
             {
-                "role": (
-                    "assistant"
-                ),
+                "role": "assistant",
                 "content": answer,
             }
         )
@@ -1279,9 +1291,17 @@ def send_chat_message(
             {
                 "state": (
                     "provider_error"
-                )
+                ),
+                "trace": {
+                    "enabled": True,
+                    "write_warning": (
+                        session
+                        .last_trace_warning
+                    ),
+                },
             },
         )
+
     except Exception as exc:
         answer = (
             "Agent 运行失败："
@@ -1290,9 +1310,7 @@ def send_chat_message(
 
         chat_history.append(
             {
-                "role": (
-                    "assistant"
-                ),
+                "role": "assistant",
                 "content": answer,
             }
         )
@@ -1305,7 +1323,14 @@ def send_chat_message(
             {
                 "state": (
                     "agent_error"
-                )
+                ),
+                "trace": {
+                    "enabled": True,
+                    "write_warning": (
+                        session
+                        .last_trace_warning
+                    ),
+                },
             },
         )
 
@@ -1321,7 +1346,7 @@ def send_chat_message(
         "",
         (
             f"状态：{result.state.value}；"
-            f"结束原因："
+            "结束原因："
             f"{result.finish_reason.value}；"
             f"模型轮次：{result.model_rounds}"
         ),
@@ -1367,16 +1392,12 @@ def confirm_agent_action(
 
         chat_history.append(
             {
-                "role": (
-                    "assistant"
-                ),
+                "role": "assistant",
                 "content": answer,
             }
         )
 
-        rows, summary = (
-            refresh_today()
-        )
+        rows, summary = refresh_today()
 
         return (
             chat_history,
@@ -1393,6 +1414,7 @@ def confirm_agent_action(
 
     try:
         result = session.confirm()
+
     except Exception as exc:
         answer = (
             "确认执行失败："
@@ -1401,16 +1423,12 @@ def confirm_agent_action(
 
         chat_history.append(
             {
-                "role": (
-                    "assistant"
-                ),
+                "role": "assistant",
                 "content": answer,
             }
         )
 
-        rows, summary = (
-            refresh_today()
-        )
+        rows, summary = refresh_today()
 
         return (
             chat_history,
@@ -1419,7 +1437,14 @@ def confirm_agent_action(
             {
                 "state": (
                     "confirmation_error"
-                )
+                ),
+                "trace": {
+                    "enabled": True,
+                    "write_warning": (
+                        session
+                        .last_trace_warning
+                    ),
+                },
             },
             rows,
             summary,
@@ -1432,15 +1457,13 @@ def confirm_agent_action(
         }
     )
 
-    rows, summary = (
-        refresh_today()
-    )
+    rows, summary = refresh_today()
 
     return (
         chat_history,
         (
             f"状态：{result.state.value}；"
-            f"结束原因："
+            "结束原因："
             f"{result.finish_reason.value}"
         ),
         _tool_steps_json(
@@ -1467,7 +1490,7 @@ def cancel_agent_action(
     list[dict[str, Any]],
     dict[str, Any],
 ]:
-    """取消 Agent pending_task 或草稿。"""
+    """取消 Agent pending_task 或待确认草稿。"""
 
     chat_history = list(
         history or []
@@ -1485,9 +1508,7 @@ def cancel_agent_action(
 
         chat_history.append(
             {
-                "role": (
-                    "assistant"
-                ),
+                "role": "assistant",
                 "content": answer,
             }
         )
@@ -1503,7 +1524,39 @@ def cancel_agent_action(
             },
         )
 
-    result = session.cancel()
+    try:
+        result = session.cancel()
+
+    except Exception as exc:
+        answer = (
+            "取消操作失败："
+            f"{exc}"
+        )
+
+        chat_history.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+
+        return (
+            chat_history,
+            answer,
+            [],
+            {
+                "state": (
+                    "cancellation_error"
+                ),
+                "trace": {
+                    "enabled": True,
+                    "write_warning": (
+                        session
+                        .last_trace_warning
+                    ),
+                },
+            },
+        )
 
     chat_history.append(
         {
@@ -1516,7 +1569,7 @@ def cancel_agent_action(
         chat_history,
         (
             f"状态：{result.state.value}；"
-            f"结束原因："
+            "结束原因："
             f"{result.finish_reason.value}"
         ),
         _tool_steps_json(
@@ -1557,7 +1610,14 @@ def reset_agent_conversation(
         "会话已重置。",
         [],
         {
-            "state": "idle"
+            "state": "idle",
+            "trace": {
+                "enabled": True,
+                "path": (
+                    "data/"
+                    "agent_traces.jsonl"
+                ),
+            },
         },
     )
 
@@ -1585,11 +1645,9 @@ def build_demo() -> gr.Blocks:
         )
 
         with gr.Tab("今天"):
-            refresh_today_button = (
-                gr.Button(
-                    "刷新今天",
-                    variant="secondary",
-                )
+            refresh_today_button = gr.Button(
+                "刷新今天",
+                variant="secondary",
             )
 
             today_table = gr.Dataframe(
@@ -1629,9 +1687,7 @@ def build_demo() -> gr.Blocks:
             chatbot = gr.Chatbot(
                 value=[
                     {
-                        "role": (
-                            "assistant"
-                        ),
+                        "role": "assistant",
                         "content": (
                             "你好。你可以说："
                             "“记录喝水500毫升”、"
@@ -1658,23 +1714,20 @@ def build_demo() -> gr.Blocks:
                     "发送",
                     variant="primary",
                 )
-                confirm_agent_button = (
-                    gr.Button(
-                        "确认当前操作",
-                        variant="primary",
-                    )
+
+                confirm_agent_button = gr.Button(
+                    "确认当前操作",
+                    variant="primary",
                 )
-                cancel_agent_button = (
-                    gr.Button(
-                        "取消当前操作",
-                        variant="stop",
-                    )
+
+                cancel_agent_button = gr.Button(
+                    "取消当前操作",
+                    variant="stop",
                 )
-                reset_agent_button = (
-                    gr.Button(
-                        "重置会话",
-                        variant="secondary",
-                    )
+
+                reset_agent_button = gr.Button(
+                    "重置会话",
+                    variant="secondary",
                 )
 
             agent_status = gr.Markdown(
@@ -1683,40 +1736,23 @@ def build_demo() -> gr.Blocks:
 
         with gr.Tab("健康时间线"):
             with gr.Row():
-                timeline_date = (
-                    gr.Textbox(
-                        label=(
-                            "日期 "
-                            "(YYYY-MM-DD)"
-                        ),
-                        value=initial_date,
-                    )
+                timeline_date = gr.Textbox(
+                    label=(
+                        "日期 "
+                        "(YYYY-MM-DD)"
+                    ),
+                    value=initial_date,
                 )
 
                 timeline_event_type = (
                     gr.Dropdown(
                         label="事件类型",
                         choices=[
-                            (
-                                "全部",
-                                "",
-                            ),
-                            (
-                                "饮食",
-                                "meal",
-                            ),
-                            (
-                                "饮水",
-                                "water",
-                            ),
-                            (
-                                "体重",
-                                "weight",
-                            ),
-                            (
-                                "运动",
-                                "exercise",
-                            ),
+                            ("全部", ""),
+                            ("饮食", "meal"),
+                            ("饮水", "water"),
+                            ("体重", "weight"),
+                            ("运动", "exercise"),
                         ],
                         value="",
                     )
@@ -1729,34 +1765,28 @@ def build_demo() -> gr.Blocks:
                     )
                 )
 
-            timeline_status = (
-                gr.Markdown()
-            )
+            timeline_status = gr.Markdown()
 
-            timeline_table = (
-                gr.Dataframe(
-                    headers=[
-                        "event_id",
-                        "occurred_at",
-                        "event_type",
-                        "detail",
-                        "input_source",
-                        "updated_at",
-                    ],
-                    datatype=[
-                        "str",
-                        "str",
-                        "str",
-                        "str",
-                        "str",
-                        "str",
-                    ],
-                    value=[],
-                    interactive=False,
-                    label=(
-                        "健康时间线"
-                    ),
-                )
+            timeline_table = gr.Dataframe(
+                headers=[
+                    "event_id",
+                    "occurred_at",
+                    "event_type",
+                    "detail",
+                    "input_source",
+                    "updated_at",
+                ],
+                datatype=[
+                    "str",
+                    "str",
+                    "str",
+                    "str",
+                    "str",
+                    "str",
+                ],
+                value=[],
+                interactive=False,
+                label="健康时间线",
             )
 
             gr.Markdown(
@@ -1772,16 +1802,12 @@ def build_demo() -> gr.Blocks:
                 "营养值来自 RAG 候选和确定性计算。"
             )
 
-            meal_preview_state = (
-                gr.State(
-                    value=None
-                )
+            meal_preview_state = gr.State(
+                value=None
             )
 
             image_input = gr.File(
-                label=(
-                    "上传一张食物图片"
-                ),
+                label="上传一张食物图片",
                 file_count="single",
                 file_types=[
                     ".jpg",
@@ -1807,71 +1833,59 @@ def build_demo() -> gr.Blocks:
                 variant="secondary",
             )
 
-            candidate_status = (
-                gr.Markdown()
+            candidate_status = gr.Markdown()
+
+            candidate_table = gr.Dataframe(
+                headers=[
+                    "food_id",
+                    "name",
+                    "category",
+                    "stage",
+                    "match_type",
+                    "matched_term",
+                    "score",
+                    "source",
+                    "source_version",
+                    "candidate_source",
+                ],
+                datatype=[
+                    "str",
+                    "str",
+                    "str",
+                    "number",
+                    "str",
+                    "str",
+                    "number",
+                    "str",
+                    "str",
+                    "str",
+                ],
+                value=[],
+                interactive=False,
+                label="RAG 候选",
             )
 
-            candidate_table = (
-                gr.Dataframe(
-                    headers=[
-                        "food_id",
-                        "name",
-                        "category",
-                        "stage",
-                        "match_type",
-                        "matched_term",
-                        "score",
-                        "source",
-                        "source_version",
-                        "candidate_source",
-                    ],
-                    datatype=[
-                        "str",
-                        "str",
-                        "str",
-                        "number",
-                        "str",
-                        "str",
-                        "number",
-                        "str",
-                        "str",
-                        "str",
-                    ],
-                    value=[],
-                    interactive=False,
-                    label="RAG 候选",
-                )
+            selected_food = gr.Dropdown(
+                label="选择候选食物",
+                choices=[],
+                value=None,
+                interactive=True,
             )
 
-            selected_food = (
-                gr.Dropdown(
-                    label="选择候选食物",
-                    choices=[],
-                    value=None,
-                    interactive=True,
-                )
+            calculate_button = gr.Button(
+                "计算营养估算",
+                variant="primary",
             )
 
-            calculate_button = (
-                gr.Button(
-                    "计算营养估算",
-                    variant="primary",
-                )
-            )
-
-            calculation_status = (
-                gr.Markdown()
-            )
+            calculation_status = gr.Markdown()
 
             meal_preview = gr.Markdown(
                 "尚未计算待确认记录。"
             )
 
-            recompute_evidence = (
-                gr.Markdown(
-                    "### 可重算证据\n\n"
-                    "尚未选择数据行并计算。"
-                )
+            recompute_evidence = gr.Markdown(
+                "### 可重算证据\n\n"
+                "尚未选择数据行并计算。"
             )
 
             with gr.Row():
@@ -1881,6 +1895,7 @@ def build_demo() -> gr.Blocks:
                         variant="primary",
                     )
                 )
+
                 meal_cancel_button = (
                     gr.Button(
                         "取消饮食草稿",
@@ -1888,47 +1903,70 @@ def build_demo() -> gr.Blocks:
                     )
                 )
 
-            meal_save_status = (
-                gr.Markdown()
-            )
+            meal_save_status = gr.Markdown()
 
         with gr.Tab("开发者证据"):
             gr.Markdown(
                 "## Agent 执行证据\n\n"
-                "确认令牌已经脱敏。"
-                "后续阶段会将这些数据写入 "
-                "AgentTrace JSONL。"
+                "工具参数值和确认令牌均已脱敏。"
             )
 
-            latest_agent_steps = (
-                gr.JSON(
-                    value=[],
-                    label="tool_steps",
-                )
+            latest_agent_steps = gr.JSON(
+                value=[],
+                label="脱敏 tool_steps",
             )
 
-            latest_agent_state = (
-                gr.JSON(
-                    value={
-                        "state": "idle"
+            latest_agent_state = gr.JSON(
+                value={
+                    "state": "idle",
+                    "trace": {
+                        "enabled": True,
+                        "path": (
+                            "data/"
+                            "agent_traces.jsonl"
+                        ),
                     },
-                    label=(
-                        "Agent state"
-                    ),
+                },
+                label="Agent state",
+            )
+
+            gr.Markdown(
+                "## 持久化 Agent Trace\n\n"
+                "每次发送、确认和取消都会写入 "
+                "`data/agent_traces.jsonl`。\n\n"
+                "文件中只保存状态、工具名称、"
+                "参数名称和错误码，不保存健康参数值、"
+                "原始对话或确认令牌。"
+            )
+
+            with gr.Row():
+                agent_trace_limit = gr.Number(
+                    label="读取条数",
+                    value=20,
+                    minimum=1,
+                    maximum=200,
+                    precision=0,
                 )
+
+                refresh_agent_trace_button = (
+                    gr.Button(
+                        "刷新 Agent Trace",
+                        variant="secondary",
+                    )
+                )
+
+            recent_agent_traces = gr.JSON(
+                value=refresh_agent_traces(),
+                label="最近 Agent Trace",
             )
 
             gr.Markdown(
                 "## 最近一次饮食检索 Trace"
             )
 
-            latest_retrieval_trace = (
-                gr.JSON(
-                    value={},
-                    label=(
-                        "RetrievalTrace"
-                    ),
-                )
+            latest_retrieval_trace = gr.JSON(
+                value={},
+                label="RetrievalTrace",
             )
 
         with gr.Tab("隐私与数据"):
@@ -1936,6 +1974,9 @@ def build_demo() -> gr.Blocks:
                 "## 隐私与数据\n\n"
                 "- 健康事件保存在本机 "
                 "`data/health_events.jsonl`。\n"
+                "- Agent Trace 保存在本机 "
+                "`data/agent_traces.jsonl`。\n"
+                "- Agent Trace 不保存原始对话和健康参数值。\n"
                 "- 原始图片不会复制到健康记录。\n"
                 "- `.env` 和 API Key 不进入 Git。\n"
                 "- 确认令牌不会展示在开发者证据中。\n"
@@ -2019,21 +2060,19 @@ def build_demo() -> gr.Blocks:
             ],
         )
 
-        chat_event = (
-            send_button.click(
-                fn=send_chat_message,
-                inputs=[
-                    chat_input,
-                    chatbot,
-                ],
-                outputs=[
-                    chatbot,
-                    chat_input,
-                    agent_status,
-                    latest_agent_steps,
-                    latest_agent_state,
-                ],
-            )
+        send_button.click(
+            fn=send_chat_message,
+            inputs=[
+                chat_input,
+                chatbot,
+            ],
+            outputs=[
+                chatbot,
+                chat_input,
+                agent_status,
+                latest_agent_steps,
+                latest_agent_state,
+            ],
         )
 
         chat_input.submit(
@@ -2089,6 +2128,16 @@ def build_demo() -> gr.Blocks:
             ],
         )
 
+        refresh_agent_trace_button.click(
+            fn=refresh_agent_traces,
+            inputs=[
+                agent_trace_limit
+            ],
+            outputs=[
+                recent_agent_traces
+            ],
+        )
+
         demo.load(
             fn=refresh_today,
             outputs=[
@@ -2097,11 +2146,16 @@ def build_demo() -> gr.Blocks:
             ],
         )
 
+        demo.load(
+            fn=refresh_agent_traces,
+            outputs=[
+                recent_agent_traces
+            ],
+        )
+
         demo.unload(
             cleanup_agent_session
         )
-
-        del chat_event
 
     return demo
 
