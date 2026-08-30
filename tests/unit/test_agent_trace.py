@@ -11,7 +11,9 @@ from src.agent.trace import (
     AgentTraceReadError,
     AgentTraceStore,
     AgentTraceToolStep,
+    _safe_tool_steps,
 )
+from src.agent.models import AgentToolStep
 
 
 def make_trace(
@@ -139,3 +141,25 @@ def test_read_recent_reports_invalid_json_line(
         match="第 1 行格式错误",
     ):
         store.read_recent(limit=20)
+
+
+def test_safe_tool_steps_preserves_standard_error_code() -> None:
+    steps = _safe_tool_steps(
+        (
+            AgentToolStep(
+                call_id="call-1",
+                tool_name="query_health_events",
+                arguments={"date": "invalid"},
+                result={
+                    "ok": False,
+                    "data": None,
+                    "error": {
+                        "error_code": "INVALID_DATE",
+                        "message": "日期无效",
+                    },
+                },
+            ),
+        )
+    )
+
+    assert steps[0].error_code == "INVALID_DATE"

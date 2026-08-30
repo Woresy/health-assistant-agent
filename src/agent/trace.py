@@ -462,7 +462,7 @@ def _safe_tool_steps(
         ):
             raw_error_code = (
                 raw_error.get(
-                    "code"
+                    "error_code"
                 )
             )
 

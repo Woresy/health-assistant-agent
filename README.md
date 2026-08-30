@@ -16,6 +16,8 @@
 - 8.27：完成食物数据准备、Hybrid RAG、拒答门控和固定检索评测；
 - 8.28：完成饮食、饮水、体重、运动四类健康事件的保存、查询、修改和删除；
 - 8.29：完成健康时间线、每日汇总、多轮补参、脱敏 Agent Trace 和失败 E2E。
+- 8.30：在保留原有工具与存储边界的前提下接入 LangGraph，支持 checkpoint、
+  缺参 interrupt、写操作 interrupt，并保留 legacy 编排器作为回退。
 
 ### 功能状态
 
@@ -34,13 +36,14 @@
 | 四类事件修改 | 已完成 | 先展示前后对比，确认后更新 |
 | 四类事件删除 | 已完成 | 先展示目标，确认后删除 |
 | LLM Agent Loop | 已完成 | 有限模型轮次、工具白名单和 Tool Result 回传 |
+| LangGraph 编排 | 已完成 | StateGraph、InMemorySaver、补参/确认 interrupt、legacy 回退 |
 | OpenAI-compatible Provider | 已完成 | 支持配置 DeepSeek 等兼容 Chat Completions Tools 的 Provider |
 | pending task | 已完成 | 缺少必填参数时暂存任务并在下一轮合并参数 |
 | 健康时间线 | 已完成 | 按用户、日期和类型读取已保存事件 |
 | 每日汇总 | 已完成 | 确定性汇总只读取 committed events |
 | Agent 执行证据 | 已完成 | 页面展示脱敏 `model_rounds`、`tool_steps`、`state` 和 pending 状态 |
 | AgentTrace JSONL | 已完成 | 发送、确认和取消会脱敏写入 `data/agent_traces.jsonl` |
-| 失败流程 E2E | 已完成 | 9 条 E2E 覆盖成功、缺参、取消、非法参数、白名单和 Trace 失败 |
+| 流程 E2E | 已完成 | 15 条 E2E 覆盖 legacy、LangGraph、成功、缺参、确认、取消、白名单和失败隔离 |
 | 图片食物识别 | 未完成 | 尚未接入真实 YOLO 权重 |
 | GitHub Actions CI | 未完成 | 最终验收前补充 |
 | P1 目标、记忆和 check-in | 未完成 | 不属于当前 P0 阶段 |
@@ -111,6 +114,33 @@ HealthEvent
 - 非法参数、未知工具、用户取消和 Trace 写入失败均有固定测试；
 - E2E 测试共 9 条，满足“至少 8 条完整流程”要求。
 
+## 8.30 LangGraph 接入结果
+
+本次改造没有替换已经通过测试的模型适配器、HealthToolRouter、领域工具、确认
+令牌、幂等控制和 JSONL Store，只将 Agent 的循环与状态跳转迁移到显式图编排。
+
+已完成：
+
+- 新增 `LangGraphAgentRunner`，使用 `StateGraph` 表达模型、工具、补参、确认、
+  执行和失败路径；
+- 使用 `InMemorySaver` 按 Gradio `session_hash/thread_id` 保存进程内 checkpoint；
+- 缺少参数时停在 `await_clarification`，下一条用户输入通过 `Command(resume=...)`
+  恢复同一任务；
+- 保存、修改或删除草稿停在 `await_confirmation`，确认后才进入
+  `execute_confirmation`；
+- 草稿生成节点与 interrupt 节点分离，避免恢复节点时重复生成确认令牌；
+- 写工具继续校验签名确认令牌和幂等键，LangGraph 不直接写业务数据；
+- 确认执行失败时重新进入确认 interrupt，事件不落盘，可重试或取消；
+- 增加 `AGENT_ORCHESTRATOR=langgraph|legacy`，支持无数据迁移的编排器回退；
+- 修复 Agent Trace 对统一 `error_code` 字段的读取；
+- 新增 6 条 LangGraph E2E，全量测试当前为 `102 passed`；
+- Lexical 与 Hybrid 固定评测 Recall@3 均为 `0.9474`，拒答准确率为 `1.0`。
+
+当前限制：LangGraph checkpoint 只存在进程内。应用重启会清除尚未完成的补参或
+确认任务，但已经确认写入 `data/health_events.jsonl` 的 HealthEvent 不受影响。
+手动图片饮食、候选选择和确定性营养计算目前仍是独立 UI 流程，尚未迁移为
+LangGraph 子图。
+
 ## 核心设计原则
 
 ### 1. RAG 只负责找食物
@@ -174,12 +204,16 @@ auto_select_allowed = false
 
 ## 系统架构
 
+详细节点、状态、确认和失败回滚说明见
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。LangGraph 的自动化与页面人工
+验收步骤见 [`docs/LANGGRAPH_ACCEPTANCE.md`](docs/LANGGRAPH_ACCEPTANCE.md)。
+
 ```mermaid
 flowchart TD
     U[用户输入或图片] --> UI[Gradio UI]
 
     UI --> CS[Conversation Session]
-    CS --> AR[Agent Runner]
+    CS --> AR[Agent Runner: LangGraph / Legacy]
     AR --> MP[OpenAI-compatible Model Provider]
     AR --> TR[Health Tool Router]
 
@@ -220,6 +254,11 @@ flowchart TD
 
 ## Agent 执行链路
 
+默认使用 LangGraph `StateGraph` 编排。`AGENT_ORCHESTRATOR=legacy` 可以切回
+原有 Python Loop，用于回归比较和安全回退。LangGraph 只接管状态跳转、循环、
+checkpoint 和 interrupt；模型适配器、工具白名单、确认令牌、幂等控制、JSONL
+事件存储和 Trace 均继续复用现有实现。
+
 一次 Agent 对话可能经历：
 
 ```text
@@ -242,6 +281,17 @@ Agent 在以下情况终止当前轮次：
 - 工具参数无效；
 - 工具执行失败；
 - 达到最大模型轮数。
+
+缺参和待确认草稿不是普通文本约定，而是两个真实的 LangGraph 暂停点：
+
+```text
+await_clarification → Command(resume={action: clarify, text: ...})
+await_confirmation  → Command(resume={action: confirm | cancel})
+```
+
+Gradio 浏览器 `session_hash` 作为 LangGraph `thread_id`。P0 使用进程内
+`InMemorySaver`，应用重启后短期对话 checkpoint 不保留；已确认的 HealthEvent
+和脱敏 AgentTrace 仍分别保存在 JSONL 中。
 
 ### Agent 状态
 
@@ -387,6 +437,7 @@ Reciprocal Rank Fusion 使用 Lexical 和 Dense 两个通道的排名进行融�
 - NumPy
 - Sentence Transformers
 - BAAI/bge-small-zh-v1.5
+- LangGraph 1.2
 - pytest
 - JSON Lines
 
@@ -413,8 +464,10 @@ health-assistant-agent/
 │       └── index_manifest.json
 ├── docs/
 │   ├── DATA_SOURCES.md
+│   ├── ARCHITECTURE.md
 │   ├── DECISIONS.md
 │   ├── EVALUATION.md
+│   ├── LANGGRAPH_ACCEPTANCE.md
 │   ├── RAG.md
 │   ├── eval_hybrid.json
 │   ├── eval_lexical.json
@@ -425,9 +478,11 @@ health-assistant-agent/
 │   └── run_eval.py
 ├── src/
 │   ├── agent/
+│   │   ├── langgraph_runner.py
 │   │   ├── models.py
 │   │   ├── openai_model.py
 │   │   ├── runner.py
+│   │   ├── trace.py
 │   │   └── tool_router.py
 │   ├── health/
 │   │   ├── models.py
@@ -461,6 +516,8 @@ health-assistant-agent/
 │       └── image_input.py
 └── tests/
     ├── e2e/
+    │   ├── test_agent_health_flows.py
+    │   ├── test_langgraph_health_flows.py
     │   └── test_manual_meal_flow.py
     ├── eval/
     │   ├── nutrition_retrieval.jsonl
@@ -572,6 +629,7 @@ AGENT_PROVIDER_MODE=openai_compatible
 AGENT_API_KEY=<你的API-Key>
 AGENT_BASE_URL=<Provider的OpenAI-compatible-Base-URL>
 AGENT_MODEL=<支持Tool-Calling的模型名称>
+AGENT_ORCHESTRATOR=langgraph
 
 AGENT_REQUEST_TIMEOUT=60
 AGENT_MAX_RETRIES=2
@@ -595,6 +653,7 @@ AGENT_MODEL=deepseek-v4-flash
 - 不要把真实 API Key 写入 `.env.example`；
 - 不要提交 `.env`；
 - Provider 必须支持 Chat Completions 和 Tool Calling；
+- `AGENT_ORCHESTRATOR` 可设为 `langgraph` 或 `legacy`；
 - Provider 超时、认证失败或参数异常时，页面应明确显示错误，不能伪造成功。
 
 ## 配置 Hybrid RAG
@@ -917,7 +976,7 @@ python -m pytest -q \
 python -m pytest -q tests/eval
 ```
 
-### 人工饮食主链 E2E
+### Agent 与人工饮食主链 E2E
 
 ```bash
 python -m pytest -q tests/e2e
@@ -942,8 +1001,13 @@ python -m pytest -q tests/e2e
 - 待确认期间阻止新的写请求；
 - 删除草稿取消后保留原事件；
 - Agent Trace 写入失败不影响健康事件保存。
+- LangGraph 确认 interrupt 和补参 interrupt；
+- LangGraph 只读工具回到模型；
+- LangGraph 工具强制调用门控；
+- LangGraph 确认失败后重新暂停并安全重试。
 
-当前共 9 条 E2E，满足 PRD “至少 8 条完整流程”的要求。
+当前共 15 条 E2E，其中原有主链 9 条、LangGraph 专项 6 条，满足 PRD
+“至少 8 条完整流程”的要求。
 
 ## 运行 RAG 离线评测
 
@@ -1241,18 +1305,22 @@ Trace 仅保留会话和用户哈希、输入长度和哈希、状态、模型�
 - [x] 保存、修改和删除前确认；
 - [x] 幂等保存、修改和删除；
 - [x] 有限轮次 Agent Loop；
+- [x] LangGraph StateGraph、checkpoint 和 human-in-the-loop interrupt；
+- [x] legacy/langgraph 双编排器回退；
 - [x] Tool 白名单和参数校验；
 - [x] `model_rounds`、`tool_steps` 和 Agent `state`；
 - [x] 健康时间线联合验收；
 - [x] 每日确定性汇总联合验收；
 - [x] 多轮缺参追问和 `pending_task`；
 - [x] 脱敏 `AgentTrace JSONL`；
-- [x] 9 条完整流程 E2E；
+- [x] 15 条完整流程 E2E（含 6 条 LangGraph 专项 E2E）；
 - [x] 失败不落数据和 Trace 失败隔离；
 - [x] 明确健康意图的工具强制调用门控；
 - [x] 健康安全边界；
 - [x] 隐私和 Git 忽略规则；
-- [x] 核心人工饮食 E2E。
+- [x] 核心人工饮食 E2E；
+- [x] `docs/ARCHITECTURE.md`；
+- [x] LangGraph 人工验收手册。
 
 ### 进行中或未完成
 
@@ -1261,7 +1329,6 @@ Trace 仅保留会话和用户哈希、输入长度和哈希、状态、模型�
 - [ ] 至少 10 张固定验收图片；
 - [ ] 真实 YOLO 冒烟与失败回退；
 - [ ] 由未参与开发的人完成十分钟启动验证；
-- [ ] `docs/ARCHITECTURE.md`；
 - [ ] P1 档案、目标、记忆和 check-in；
 - [ ] 外部 Provider 行动适配器。
 
@@ -1294,6 +1361,8 @@ Trace 仅保留会话和用户哈希、输入长度和哈希、状态、模型�
 
 ### 8.30
 
+- [x] 接入 LangGraph 编排并保留 legacy 回退；
+- [x] 补充 checkpoint、补参 interrupt 和确认 interrupt 测试；
 - 不加载 YOLO，现场运行人工饮食主链；
 - 四类健康事件各完成一条；
 - 展示成功 Trace 和失败回滚；
@@ -1307,6 +1376,125 @@ Trace 仅保留会话和用户哈希、输入长度和哈希、状态、模型�
 - 教练式周期复盘；
 - YOLO 食物候选预填；
 - 一个外部系统的授权交互。
+
+## 提交到 GitHub
+
+以下流程只提交本次 LangGraph 改造。不要使用 `git add .`，因为工作区可能还有
+实验索引、需求原文或其他尚未确认是否公开的未跟踪文件。
+
+### 1. 检查分支、远程仓库和工作区
+
+```bash
+git branch --show-current
+git remote -v
+git status --short
+```
+
+当前仓库远程地址应为：
+
+```text
+origin  https://github.com/Woresy/health-assistant-agent.git
+```
+
+### 2. 提交前验证
+
+```bash
+.venv/bin/pytest -q
+
+.venv/bin/python scripts/run_eval.py \
+  --mode lexical \
+  --report /tmp/health-agent-eval-lexical.json
+
+.venv/bin/python scripts/run_eval.py \
+  --mode hybrid \
+  --report /tmp/health-agent-eval-hybrid.json
+
+git diff --check
+```
+
+预期：pytest 全部通过；两种评测均返回 `passed: true`；`git diff --check` 没有
+输出。
+
+### 3. 只暂存本次改造文件
+
+```bash
+git add \
+  .env.example \
+  README.md \
+  docs/ARCHITECTURE.md \
+  docs/DECISIONS.md \
+  docs/EVALUATION.md \
+  docs/LANGGRAPH_ACCEPTANCE.md \
+  requirements.txt \
+  src/agent/langgraph_runner.py \
+  src/agent/trace.py \
+  src/ui/app.py \
+  tests/e2e/test_langgraph_health_flows.py \
+  tests/unit/test_agent_trace.py
+```
+
+不要暂存：
+
+- `.env` 和任何真实 API Key；
+- `data/health_events.jsonl`、`data/agent_traces.jsonl`；
+- 尚未核对来源和公开边界的完整数据或实验索引；
+- 与本次 LangGraph 改造无关的未跟踪文件。
+
+### 4. 审核暂存内容
+
+```bash
+git status --short
+git diff --cached --stat
+git diff --cached --check
+git diff --cached
+```
+
+重点确认没有 `.env`、Token、真实健康数据、运行时 Trace 或完整未授权营养数据。
+
+### 5. 创建提交
+
+```bash
+git commit -m "feat(agent): add langgraph orchestration and human approval"
+```
+
+提交后确认：
+
+```bash
+git log -1 --oneline
+git status --short
+```
+
+`git status` 仍可能显示未暂存的个人实验文件，这是正常现象；只要本次目标文件
+已经进入提交即可。
+
+### 6. 推送方式二选一
+
+个人仓库直接推送当前 `main`：
+
+```bash
+git push origin main
+```
+
+如果希望通过 Pull Request 审核，可以在步骤 5 提交前先创建分支；如果已经在
+本地 `main` 完成提交，也可以从当前提交创建该分支：
+
+```bash
+git switch -c feat/langgraph-orchestration
+git push -u origin feat/langgraph-orchestration
+```
+
+然后打开 GitHub 仓库，根据页面提示创建 Pull Request，目标分支选择 `main`。
+
+### 7. GitHub 页面复核
+
+推送后检查：
+
+1. 最新提交信息正确；
+2. `requirements.txt` 包含固定 LangGraph 版本；
+3. README 能正常渲染 Mermaid 架构图；
+4. `.env`、API Key 和真实健康数据没有出现；
+5. `docs/ARCHITECTURE.md` 与 `docs/LANGGRAPH_ACCEPTANCE.md` 可打开；
+6. 仓库仍能按照“十分钟快速启动”章节安装和启动。
 
 ## License
 

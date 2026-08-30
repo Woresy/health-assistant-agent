@@ -14,6 +14,9 @@ import gradio as gr
 from dotenv import load_dotenv
 
 from src.agent.models import AgentRunResult
+from src.agent.langgraph_runner import (
+    LangGraphAgentRunner,
+)
 from src.agent.openai_model import (
     AgentConfigurationError,
     AgentProviderError,
@@ -85,6 +88,11 @@ APP_TIMEZONE = os.getenv(
     "Asia/Shanghai",
 ).strip()
 
+AGENT_ORCHESTRATOR = os.getenv(
+    "AGENT_ORCHESTRATOR",
+    "langgraph",
+).strip().lower()
+
 
 repository = FoodRepository()
 
@@ -102,10 +110,24 @@ agent_trace_store = AgentTraceStore(
 
 
 try:
+    if AGENT_ORCHESTRATOR not in {
+        "legacy",
+        "langgraph",
+    }:
+        raise AgentConfigurationError(
+            "AGENT_ORCHESTRATOR 只能是 "
+            "legacy 或 langgraph"
+        )
+
     (
         agent_model,
         AGENT_PROVIDER_STATUS,
     ) = create_agent_model_from_environment()
+
+    AGENT_PROVIDER_STATUS = (
+        f"{AGENT_PROVIDER_STATUS.rstrip('。；;')}；"
+        f"编排器：{AGENT_ORCHESTRATOR}"
+    )
 except AgentConfigurationError as exc:
     agent_model = None
     AGENT_PROVIDER_STATUS = (
@@ -203,7 +225,14 @@ def _get_agent_session(
         if existing is not None:
             return existing
 
-        runner = AgentRunner(
+        runner_class = (
+            LangGraphAgentRunner
+            if AGENT_ORCHESTRATOR
+            == "langgraph"
+            else AgentRunner
+        )
+
+        runner = runner_class(
             model=agent_model,
             router=tool_router,
             max_model_rounds=4,

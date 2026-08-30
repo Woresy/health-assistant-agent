@@ -20,8 +20,10 @@ python scripts/run_eval.py
 
 任一门槛不满足时退出码为 1；评测集或数据文件无效时退出码为 2。
 
-当前 28 条示例数据的报告为：Recall@3 `1.0`、Top1 Accuracy `1.0`、
-Rejection Accuracy `1.0`、Overall Pass Rate `1.0`。
+当前 28 条示例数据的实测报告为：Recall@3 `0.9474`、Top1 Accuracy
+`0.9474`、Rejection Accuracy `1.0`、Overall Pass Rate `0.95`。当前唯一失败
+用例是错别字“蕃茄”；系统选择拒答而不是猜测营养数据，因此仍通过 P0 的
+Recall@3 `>= 0.85` 和拒答准确率门槛。
 
 ## 本地完整档
 
