@@ -12,6 +12,8 @@
 - 营养检索 Trace：`data/traces.jsonl`；
 - LangGraph checkpoint：P0 使用进程内 `InMemorySaver`，只保存短期会话状态；
 - 图片默认不长期保存；
+- HealthOS P1 档案、目标版本和提醒：`data/healthos_state.json`；
+- 对话会话：`data/conversations/conversation-*.json`，浏览器刷新后可恢复；
 - 模型不能直接执行保存、修改或删除。
 
 ## 分层结构
@@ -135,3 +137,25 @@ AGENT_ORCHESTRATOR=legacy
 
 该配置切回原有 `AgentRunner`。两种实现共享模型协议、HealthToolRouter、领域工具、
 JSONL Store 和 Trace，因此回退不会迁移或改变已保存健康事件。
+
+## HealthOS P1 工具与状态
+
+Router 对模型只公开 PRD 规定的 15 个工具：档案 2 个、目标 2 个、健康事实 3 个、
+营养 2 个、知识 1 个、汇总 2 个和提醒 3 个。P0 的旧工具名称只在内部保留为
+兼容别名，不再出现在 Provider Tool Schema 中。
+
+档案、目标和提醒使用同一个确认中间件：
+
+```text
+prepare_* / create_* / list_or_cancel_*(写意图)
+→ 严格 Schema 与领域校验
+→ 返回无副作用草稿 + 短时签名令牌 + 幂等键
+→ 用户确认
+→ Router.confirm
+→ 再次验证 action、user、payload 摘要与幂等键
+→ 原子替换 healthos_state.json
+```
+
+目标保存不可变版本数组；提醒保存每次状态转换；档案只保存明确允许的最小字段。
+模型推断的疾病、心理状态和原始敏感 Prompt 不进入长期状态。周期汇总只从 committed
+HealthEvent 计算，不把缺失日期补成事实，也不解释变化原因。
