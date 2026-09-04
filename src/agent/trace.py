@@ -56,6 +56,10 @@ ConfirmationAction = Literal[
     "save",
     "update",
     "delete",
+    "profile_update",
+    "goal_change",
+    "reminder_create",
+    "reminder_change",
 ]
 
 
@@ -514,6 +518,10 @@ class TracedConversationSession(
             "Asia/Shanghai"
         ),
         trace_store: AgentTraceSink,
+        session_state: (
+            SessionState
+            | None
+        ) = None,
     ) -> None:
         super().__init__(
             runner=runner,
@@ -521,6 +529,9 @@ class TracedConversationSession(
             user_id=user_id,
             timezone_name=(
                 timezone_name
+            ),
+            session_state=(
+                session_state
             ),
         )
 
@@ -696,8 +707,14 @@ class TracedConversationSession(
         if action == "update":
             return "update"
 
-        if action == "delete":
-            return "delete"
+        if action in {
+            "delete",
+            "profile_update",
+            "goal_change",
+            "reminder_create",
+            "reminder_change",
+        }:
+            return action
 
         return None
 
@@ -745,6 +762,13 @@ class TracedConversationSession(
                 effective_action = "update"
             elif pending_action == "delete":
                 effective_action = "delete"
+            elif pending_action in {
+                "profile_update",
+                "goal_change",
+                "reminder_create",
+                "reminder_change",
+            }:
+                effective_action = pending_action
 
         trace = AgentTrace(
             created_at=(

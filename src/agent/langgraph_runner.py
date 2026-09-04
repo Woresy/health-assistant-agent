@@ -142,7 +142,7 @@ def _failed_update(
 def _cancelled_update(
     state: HealthAgentGraphState,
 ) -> HealthAgentGraphState:
-    answer = "已取消当前任务，没有写入或修改健康记录。"
+    answer = "已取消当前任务，没有写入或修改任何健康数据。"
     messages = _messages_from_state(state)
     messages.append(
         AgentMessage(role="assistant", content=answer)
@@ -181,8 +181,10 @@ def _confirmation_interrupt_payload(
     elif pending.action == "update":
         payload["current_event"] = data.get("current_event", {})
         payload["proposed_event"] = data.get("proposed_event", {})
-    else:
+    elif pending.action == "delete":
         payload["target_event"] = data.get("target_event", {})
+    else:
+        payload["preview"] = data.get("preview", {})
 
     return payload
 
@@ -292,8 +294,18 @@ class LangGraphAgentRunner:
                 finish_reason=AgentFinishReason.LOOP_LIMIT,
             )
 
+        messages = _messages_from_state(state)
+        current_context = self._router.minimal_user_context(
+            user_id=state["user_id"],
+            timezone_name=state["timezone_name"],
+        )
+        if messages and messages[0].role == "system":
+            messages[0] = AgentMessage(
+                role="system",
+                content=SYSTEM_PROMPT + current_context,
+            )
         reply = self._model.complete(
-            _messages_from_state(state),
+            messages,
             self._router.tool_definitions,
         )
 
@@ -485,10 +497,22 @@ class LangGraphAgentRunner:
         result_data = dispatch.result.get("data")
         draft_tools = {
             "prepare_health_event",
+            "prepare_event_change",
             "prepare_update_health_event",
             "prepare_delete_health_event",
+            "prepare_profile_update",
+            "prepare_goal_change",
+            "create_reminder_draft",
+            "list_or_cancel_reminders",
         }
-        if tool_call.name in draft_tools and isinstance(result_data, dict):
+        if (
+            tool_call.name in draft_tools
+            and isinstance(result_data, dict)
+            and result_data.get("action") in {
+                "save", "update", "delete", "profile_update", "goal_change",
+                "reminder_create", "reminder_change",
+            }
+        ):
             pending_confirmation = PendingConfirmation(
                 action=str(result_data["action"]),
                 tool_name=tool_call.name,
@@ -660,6 +684,10 @@ class LangGraphAgentRunner:
             "save": "save_health_event",
             "update": "update_health_event",
             "delete": "delete_health_event",
+            "profile_update": "prepare_profile_update",
+            "goal_change": "prepare_goal_change",
+            "reminder_create": "execute_reminder",
+            "reminder_change": "list_or_cancel_reminders",
         }
         step = AgentToolStep(
             call_id="user-confirmation",
@@ -673,6 +701,10 @@ class LangGraphAgentRunner:
                 "save": "健康事件已确认保存。",
                 "update": "健康事件已确认修改。",
                 "delete": "健康事件已确认删除。",
+                "profile_update": "个人档案已确认更新。",
+                "goal_change": "健康目标已确认更新，历史版本已保留。",
+                "reminder_create": "提醒已确认安排。",
+                "reminder_change": "提醒状态已确认更新。",
             }[pending.action]
             messages = _messages_from_state(state)
             messages.append(

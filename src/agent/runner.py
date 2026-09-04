@@ -25,28 +25,34 @@ from src.agent.tool_router import (
 SYSTEM_PROMPT = """
 你是个人健康管理助理 Agent。
 
-你只能协助：
-- 记录饮食、饮水、体重和运动；
-- 查询健康时间线；
-- 生成确定性每日汇总；
-- 生成健康事件修改或删除草稿。
+你是一个管理健康事实、健康目标、明确偏好、可信知识与提醒行动的个人健康助理。
+
+你可以协助：记录和查询健康事实；读取及修改用户档案；创建、调整、暂停或恢复
+健康目标；生成今日与 7/14/30 天确定性汇总；检索带来源的一般健康知识；创建、
+查看、延后、暂停或取消本地提醒。
 
 规则：
 1. 不做诊断，不替代医生，不夸大健康结论。
 2. 记录健康事件必须调用 prepare_health_event。
-3. 查询健康事件必须调用 query_health_events。
-4. 每日汇总必须调用 get_daily_health_summary。
-5. 修改健康事件必须调用 prepare_update_health_event。
-6. 删除健康事件必须调用 prepare_delete_health_event。
-7. 不能只用文本声称已经生成草稿或已经调用工具。
-8. 保存、修改和删除必须先生成草稿。
-9. 草稿生成后必须等待用户明确确认。
-10. 不得调用工具白名单以外的函数。
-11. 缺少必填参数时应提出工具调用，由工具校验生成追问。
-12. occurred_at 是可选参数；用户未说明时间时省略它，由程序使用当前时间。
-13. 每日汇总必须读取已保存事件。
-14. 饮食营养值必须来自检索和确定性计算。
-15. 只有工具真正返回草稿后，才能告诉用户等待确认。
+3. 查询健康事件必须调用 get_health_events。
+4. 每日汇总必须调用 get_daily_summary，周期趋势必须调用 get_period_summary。
+5. 修改或删除健康事件必须调用 prepare_event_change。
+6. 档案写入调用 prepare_profile_update，目标写入调用 prepare_goal_change。
+7. 一般健康知识必须调用 retrieve_health_knowledge 并在回答中展示来源；医疗、用药、
+   急症或证据不足时遵守工具的拒答结果。
+8. 提醒先调用 create_reminder_draft；查看或改变提醒调用 list_or_cancel_reminders。
+9. 不能只用文本声称已经生成草稿或已经调用工具。
+10. 所有写操作必须先生成草稿，等待用户明确确认。
+11. 不得调用工具白名单以外的函数。
+12. 缺少必填参数时应提出工具调用，由工具校验生成追问。
+13. occurred_at 是可选参数；用户未说明时间时省略它，由程序使用当前时间。
+14. 汇总只读取已保存事件，不得补数据或推断变化原因。
+15. 饮食营养值必须来自候选检索和 calculate_nutrition 的确定性计算。
+16. 只有工具真正返回草稿后，才能告诉用户等待确认。
+17. 用户可以用时间、类型和内容指代记录。修改或删除缺少 event_id 时，先调用
+   get_health_events 查找候选；多条相似记录时用自然语言请用户进一步说明。
+18. 面向用户的回答不得展示 UUID、内部 ID、原始 JSON、确认令牌或内部字段名。
+19. 教练风格只改变表达，不得改变事实、数值、来源、安全规则或确认要求。
 """.strip()
 
 
@@ -70,6 +76,16 @@ _TOOL_ACTION_TERMS = (
     "汇总",
     "统计",
     "多少",
+    "目标",
+    "提醒",
+    "偏好",
+    "档案",
+    "周报",
+    "趋势",
+    "建议",
+    "怎么",
+    "如何",
+    "应该",
 )
 
 _HEALTH_DOMAIN_TERMS = (
@@ -93,6 +109,11 @@ _HEALTH_DOMAIN_TERMS = (
     "健康记录",
     "健康事件",
     "事件",
+    "目标",
+    "提醒",
+    "教练风格",
+    "营养",
+    "健康建议",
 )
 
 _IMPLICIT_RECORD_TERMS = (
@@ -108,7 +129,7 @@ _IMPLICIT_RECORD_TERMS = (
 TOOL_REQUIRED_RETRY_PROMPT = """
 上一条响应没有调用工具，因此不能作为有效结果。
 当前用户请求涉及健康事件的记录、查询、修改、删除或汇总。
-你必须调用匹配的白名单工具。
+也可能涉及档案、目标、可信知识或提醒。你必须调用匹配的白名单工具。
 不要通过普通文本声称已经生成草稿或已经保存。
 如果缺少必填参数，也应提出工具调用，由工具校验生成追问。
 """.strip()
@@ -237,79 +258,295 @@ def _tool_result_message(
     )
 
 
+def _display_number(value: object) -> str:
+    """把健康数值转成简洁、稳定的展示文本。"""
+
+    if isinstance(value, bool):
+        return str(value)
+
+    if isinstance(value, (int, float)):
+        return f"{value:g}"
+
+    return str(value or "").strip()
+
+
+def health_event_type(
+    event_data: object,
+) -> str:
+    """从草稿预览或完整 HealthEvent 中提取事件类型。"""
+
+    if not isinstance(event_data, dict):
+        return ""
+
+    value = event_data.get("event_type")
+    return (
+        str(value).strip().lower()
+        if value is not None
+        else ""
+    )
+
+
+def health_event_label(
+    event_data: object,
+) -> str:
+    """返回适合普通用户阅读的事件类型名称。"""
+
+    return {
+        "meal": "饮食",
+        "water": "饮水",
+        "weight": "体重",
+        "exercise": "运动",
+    }.get(
+        health_event_type(event_data),
+        "健康",
+    )
+
+
+def format_health_event_summary(
+    event_data: object,
+) -> str:
+    """将草稿预览或完整 HealthEvent 转为自然语言摘要。"""
+
+    if not isinstance(event_data, dict):
+        return "健康记录"
+
+    event_type = health_event_type(
+        event_data
+    )
+    raw_payload = event_data.get(
+        "payload"
+    )
+    payload = (
+        raw_payload
+        if isinstance(raw_payload, dict)
+        else event_data
+    )
+
+    if event_type == "meal":
+        raw_food = payload.get("food")
+        food = (
+            raw_food.get("name", "饮食")
+            if isinstance(raw_food, dict)
+            else raw_food or "饮食"
+        )
+        raw_portion = payload.get("portion")
+        grams = (
+            raw_portion.get("grams")
+            if isinstance(raw_portion, dict)
+            else payload.get("grams")
+        )
+        raw_nutrition = payload.get(
+            "nutrition"
+        )
+        calories = (
+            raw_nutrition.get(
+                "calories_kcal"
+            )
+            if isinstance(
+                raw_nutrition,
+                dict,
+            )
+            else payload.get(
+                "calories_kcal"
+            )
+        )
+        details = [str(food)]
+        if grams is not None:
+            details.append(
+                f"{_display_number(grams)} g"
+            )
+        if calories is not None:
+            details.append(
+                f"约 {_display_number(calories)} kcal"
+            )
+        return "，".join(details)
+
+    if event_type == "water":
+        beverage = str(
+            payload.get("beverage")
+            or "饮用水"
+        )
+        amount = payload.get("amount_ml")
+        summary = beverage
+        if amount is not None:
+            summary += (
+                f" {_display_number(amount)} ml"
+            )
+        note = str(
+            payload.get("note") or ""
+        ).strip()
+        return (
+            f"{summary}，{note}"
+            if note
+            else summary
+        )
+
+    if event_type == "weight":
+        weight = payload.get("weight_kg")
+        summary = (
+            "体重"
+            if weight is None
+            else (
+                "体重 "
+                f"{_display_number(weight)} kg"
+            )
+        )
+        note = str(
+            payload.get("note") or ""
+        ).strip()
+        return (
+            f"{summary}，{note}"
+            if note
+            else summary
+        )
+
+    if event_type == "exercise":
+        activity = str(
+            payload.get("activity_type")
+            or "运动"
+        )
+        duration = payload.get(
+            "duration_minutes"
+        )
+        distance = payload.get(
+            "distance_km"
+        )
+        intensity = payload.get("intensity")
+        note = str(
+            payload.get("note") or ""
+        ).strip()
+        details = [activity]
+        if duration is not None:
+            details.append(
+                f"{_display_number(duration)} 分钟"
+            )
+        if distance is not None:
+            details.append(
+                f"{_display_number(distance)} km"
+            )
+        intensity_label = {
+            "low": "低强度",
+            "medium": "中等强度",
+            "high": "高强度",
+        }.get(str(intensity), "")
+        if intensity_label:
+            details.append(intensity_label)
+        if note:
+            details.append(note)
+        return "，".join(details)
+
+    return "健康记录"
+
+
 def _preview_answer(
     draft_data: dict[str, object],
 ) -> str:
-    """将副作用草稿转成待确认文本。"""
+    """将副作用草稿转成普通用户可读的待确认文本。"""
 
-    action = draft_data.get(
-        "action"
-    )
+    action = draft_data.get("action")
 
     if action == "save":
         preview = draft_data.get(
             "preview",
             {},
         )
-
+        summary = format_health_event_summary(
+            preview
+        )
         return (
-            "已生成待保存草稿，"
-            "尚未写入健康记录。\n\n"
-            + json.dumps(
-                preview,
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n\n请核对后明确确认保存。"
+            "我已经整理好这条记录，"
+            "目前还没有保存。\n\n"
+            f"**{summary}**\n\n"
+            "请核对内容，然后确认保存。"
         )
 
     if action == "update":
-        current_event = (
-            draft_data.get(
-                "current_event",
-                {},
-            )
+        current_event = draft_data.get(
+            "current_event",
+            {},
         )
-        proposed_event = (
-            draft_data.get(
-                "proposed_event",
-                {},
-            )
+        proposed_event = draft_data.get(
+            "proposed_event",
+            {},
         )
-
         return (
-            "已生成更新草稿，"
-            "尚未修改健康记录。\n\n"
-            "修改前：\n"
-            + json.dumps(
-                current_event,
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n\n修改后：\n"
-            + json.dumps(
-                proposed_event,
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n\n请核对后明确确认修改。"
+            "我已经整理好修改内容，"
+            "目前还没有更改原记录。\n\n"
+            "**修改前**  "
+            f"{format_health_event_summary(current_event)}\n\n"
+            "**修改后**  "
+            f"{format_health_event_summary(proposed_event)}\n\n"
+            "请核对内容，然后确认修改。"
         )
 
-    target_event = draft_data.get(
-        "target_event",
-        {},
-    )
-
-    return (
-        "已找到待删除记录，"
-        "尚未执行删除。\n\n"
-        + json.dumps(
-            target_event,
-            ensure_ascii=False,
-            indent=2,
+    if action == "delete":
+        target_event = draft_data.get(
+            "target_event",
+            {},
         )
-        + "\n\n请核对后明确确认删除。"
-    )
+        return (
+            "我找到了要删除的记录，"
+            "目前还没有执行删除。\n\n"
+            "**"
+            f"{format_health_event_summary(target_event)}"
+            "**\n\n"
+            "请核对内容，然后确认删除。"
+        )
+
+    preview = draft_data.get("preview", {})
+    if not isinstance(preview, dict):
+        preview = {}
+
+    if action == "profile_update":
+        after = preview.get("after", {})
+        if not isinstance(after, dict):
+            after = {}
+        style = {
+            "gentle": "温和陪伴",
+            "rational": "理性复盘",
+            "concise": "简洁提醒",
+            "goal_focused": "目标督促",
+        }.get(str(after.get("coach_style", "")), "保持当前风格")
+        return (
+            "我已经整理好档案变更，目前还没有写入。\n\n"
+            f"**教练风格：{style}**\n\n"
+            "偏好只会在你确认后保存，并且可以随时再次修改。"
+        )
+
+    if action == "goal_change":
+        after = preview.get("after", {})
+        if not isinstance(after, dict):
+            after = {}
+        return (
+            "我已经整理好目标草稿，目前还没有生效。\n\n"
+            f"**{after.get('title', '健康目标')}**  "
+            f"{_display_number(after.get('target_value'))} "
+            f"{after.get('unit', '')} · {after.get('period', '')}\n\n"
+            f"调整原因：{after.get('reason', '用户主动设置')}。"
+            "确认后会新增一个版本，旧版本仍然保留。"
+        )
+
+    if action == "reminder_create":
+        return (
+            "提醒草稿已经准备好，目前还没有安排。\n\n"
+            f"**{preview.get('content', '健康提醒')}**  "
+            f"{preview.get('scheduled_for', '')}\n\n"
+            f"时区：{preview.get('timezone_name', '')}。确认后只会创建一次。"
+        )
+
+    if action == "reminder_change":
+        operation = {
+            "cancel": "取消",
+            "snooze": "延后",
+            "pause": "暂停",
+            "resume": "恢复",
+        }.get(str(preview.get("operation", "")), "修改")
+        return (
+            f"我已经准备好{operation}这条提醒，目前还没有执行。\n\n"
+            "确认后提醒状态才会改变；取消草稿则保持原状态。"
+        )
+
+    return "操作草稿已经准备好，请核对后确认。"
 
 
 class AgentRunner:
@@ -440,9 +677,16 @@ class AgentRunner:
                 ),
             )
 
-        messages = list(
-            session_state.messages
+        messages = list(session_state.messages)
+        current_context = self._router.minimal_user_context(
+            user_id=session_state.user_id,
+            timezone_name=session_state.timezone_name,
         )
+        if messages and messages[0].role == "system":
+            messages[0] = AgentMessage(
+                role="system",
+                content=SYSTEM_PROMPT + current_context,
+            )
 
         messages.append(
             AgentMessage(
@@ -866,17 +1110,31 @@ class AgentRunner:
                 )
             )
 
+            draft_tools = {
+                "prepare_health_event",
+                "prepare_event_change",
+                "prepare_update_health_event",
+                "prepare_delete_health_event",
+                "prepare_profile_update",
+                "prepare_goal_change",
+                "create_reminder_draft",
+                "list_or_cancel_reminders",
+            }
             if (
-                tool_call.name
-                in {
-                    "prepare_health_event",
-                    "prepare_update_health_event",
-                    "prepare_delete_health_event",
-                }
+                tool_call.name in draft_tools
                 and isinstance(
                     result_data,
                     dict,
                 )
+                and result_data.get("action") in {
+                    "save",
+                    "update",
+                    "delete",
+                    "profile_update",
+                    "goal_change",
+                    "reminder_create",
+                    "reminder_change",
+                }
             ):
                 action = str(
                     result_data[
@@ -1124,6 +1382,10 @@ class AgentRunner:
             "delete": (
                 "delete_health_event"
             ),
+            "profile_update": "prepare_profile_update",
+            "goal_change": "prepare_goal_change",
+            "reminder_create": "execute_reminder",
+            "reminder_change": "list_or_cancel_reminders",
         }
 
         step = AgentToolStep(
@@ -1155,6 +1417,10 @@ class AgentRunner:
                 "delete": (
                     "健康事件已确认删除。"
                 ),
+                "profile_update": "个人档案已确认更新。",
+                "goal_change": "健康目标已确认更新，历史版本已保留。",
+                "reminder_create": "提醒已确认安排。",
+                "reminder_change": "提醒状态已确认更新。",
             }[pending.action]
 
             messages = (
@@ -1253,7 +1519,7 @@ class AgentRunner:
 
         answer = (
             "已取消当前任务，"
-            "没有写入或修改健康记录。"
+            "没有写入或修改任何健康数据。"
         )
 
         messages = (
@@ -1312,17 +1578,35 @@ class ConversationSession:
         timezone_name: str = (
             "Asia/Shanghai"
         ),
+        session_state: (
+            SessionState
+            | None
+        ) = None,
     ) -> None:
         self._runner = runner
-        self._state = (
-            runner.create_session_state(
-                session_id=session_id,
-                user_id=user_id,
-                timezone_name=(
-                    timezone_name
-                ),
+
+        if session_state is not None:
+            if (
+                session_state.session_id
+                != session_id
+                or session_state.user_id
+                != user_id
+            ):
+                raise ValueError(
+                    "恢复的会话状态与当前会话不匹配"
+                )
+
+            self._state = session_state
+        else:
+            self._state = (
+                runner.create_session_state(
+                    session_id=session_id,
+                    user_id=user_id,
+                    timezone_name=(
+                        timezone_name
+                    ),
+                )
             )
-        )
 
     @property
     def state(

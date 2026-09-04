@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from threading import RLock
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import gradio as gr
 from dotenv import load_dotenv
 
-from src.agent.models import AgentRunResult
+from src.agent.models import (
+    AgentRunResult,
+    PendingConfirmation,
+)
 from src.agent.langgraph_runner import (
     LangGraphAgentRunner,
 )
@@ -25,6 +29,8 @@ from src.agent.openai_model import (
 from src.agent.runner import (
     AgentRunner,
     ConversationSession,
+    format_health_event_summary,
+    health_event_label,
 )
 from src.agent.tool_router import HealthToolRouter
 from src.agent.trace import (
@@ -50,6 +56,10 @@ from src.nutrition.repository import (
     NutritionDataError,
 )
 from src.storage.jsonl_store import HealthEventStore
+from src.storage.healthos_store import HealthOSStore
+from src.storage.conversation_store import (
+    ConversationStore,
+)
 from src.tools.get_daily_health_summary import (
     get_daily_health_summary,
 )
@@ -65,10 +75,89 @@ from src.tools.retrieve_nutrition_candidates import (
 from src.tools.save_health_event import (
     save_health_event,
 )
+from src.tools.healthos import (
+    get_daily_summary as get_healthos_daily_summary,
+    get_health_goals,
+    get_period_summary,
+    get_user_profile,
+    list_or_cancel_reminders,
+)
 from src.ui.image_input import validate_image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+APP_CSS = (
+    PROJECT_ROOT
+    / "src"
+    / "ui"
+    / "theme.css"
+).read_text(encoding="utf-8")
+
+# Gradio 会跟随浏览器的 prefers-color-scheme。页面采用固定的浅色产品
+# 视觉，因此 dark token 也需要显式映射到同一套浅色调，避免组件局部变黑。
+APP_THEME = gr.themes.Base().set(
+    body_text_size="15px",
+    body_background_fill="#e9efe9",
+    body_background_fill_dark="#e9efe9",
+    body_text_color="#17382f",
+    body_text_color_dark="#17382f",
+    body_text_color_subdued="#65746c",
+    body_text_color_subdued_dark="#65746c",
+    background_fill_primary="#fffdf7",
+    background_fill_primary_dark="#fffdf7",
+    background_fill_secondary="#f4f7f1",
+    background_fill_secondary_dark="#f4f7f1",
+    block_background_fill="#ffffff",
+    block_background_fill_dark="#ffffff",
+    block_label_background_fill="#ffffff",
+    block_label_background_fill_dark="#ffffff",
+    block_label_text_color="#31564b",
+    block_label_text_color_dark="#31564b",
+    block_title_text_color="#31564b",
+    block_title_text_color_dark="#31564b",
+    block_label_text_size="13px",
+    block_info_text_size="12px",
+    panel_background_fill="#f4f7f1",
+    panel_background_fill_dark="#f4f7f1",
+    border_color_primary="#d6e1d8",
+    border_color_primary_dark="#d6e1d8",
+    input_background_fill="#f7f9f5",
+    input_background_fill_dark="#f7f9f5",
+    input_border_color="#d6e1d8",
+    input_border_color_dark="#d6e1d8",
+    input_placeholder_color="#65746c",
+    input_placeholder_color_dark="#65746c",
+    input_text_size="14px",
+    button_large_text_size="14px",
+    button_medium_text_size="13px",
+    button_small_text_size="12px",
+    table_even_background_fill="#ffffff",
+    table_even_background_fill_dark="#ffffff",
+    table_odd_background_fill="#f7f9f5",
+    table_odd_background_fill_dark="#f7f9f5",
+    table_text_color="#17382f",
+    table_text_color_dark="#17382f",
+    table_border_color="#d6e1d8",
+    table_border_color_dark="#d6e1d8",
+)
+
+APP_HEAD = """
+<style>
+  :root { color-scheme: only light; }
+  html, body {
+    min-height: 100%;
+    background: #e9efe9 !important;
+    color: #17382f !important;
+  }
+  @media (prefers-color-scheme: dark) {
+    html, body {
+      background: #e9efe9 !important;
+      color: #17382f !important;
+    }
+  }
+</style>
+"""
 
 load_dotenv(
     PROJECT_ROOT / ".env",
@@ -79,6 +168,18 @@ EVENTS_PATH = (
     PROJECT_ROOT
     / "data"
     / "health_events.jsonl"
+)
+
+CONVERSATIONS_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "conversations"
+)
+
+HEALTHOS_STATE_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "healthos_state.json"
 )
 
 LOCAL_USER_ID = "local-demo-user"
@@ -100,12 +201,22 @@ event_store = HealthEventStore(
     EVENTS_PATH
 )
 
+healthos_store = HealthOSStore(
+    HEALTHOS_STATE_PATH
+)
+
 tool_router = HealthToolRouter(
-    event_store
+    event_store,
+    healthos_store=healthos_store,
+    nutrition_repository=repository,
 )
 
 agent_trace_store = AgentTraceStore(
     DEFAULT_AGENT_TRACE_PATH
+)
+
+conversation_store = ConversationStore(
+    CONVERSATIONS_PATH
 )
 
 
@@ -142,6 +253,11 @@ _AGENT_SESSIONS: dict[
 ] = {}
 
 _AGENT_SESSIONS_LOCK = RLock()
+
+_REQUEST_SESSION_ALIASES: dict[
+    str,
+    str,
+] = {}
 
 
 def _error_text(
@@ -185,10 +301,10 @@ def _today_string() -> str:
     )
 
 
-def _session_key(
+def _request_session_key(
     request: gr.Request,
 ) -> str:
-    """获取 Gradio 浏览器会话标识。"""
+    """获取当前页面实例的 Gradio 会话标识。"""
 
     session_hash = getattr(
         request,
@@ -203,6 +319,61 @@ def _session_key(
         return session_hash.strip()
 
     return "local-fallback-session"
+
+
+def _conversation_id(
+    stored_value: Any,
+) -> str:
+    """校验或生成浏览器长期保存的匿名会话标识。"""
+
+    try:
+        parsed = UUID(
+            str(stored_value).strip()
+        )
+    except (ValueError, TypeError):
+        parsed = uuid4()
+
+    return parsed.hex
+
+
+def _bind_conversation(
+    stored_value: Any,
+    request: gr.Request,
+) -> tuple[str, str]:
+    """把页面临时 session_hash 绑定到稳定会话。"""
+
+    browser_id = _conversation_id(
+        stored_value
+    )
+    session_key = (
+        f"conversation-{browser_id}"
+    )
+    request_key = _request_session_key(
+        request
+    )
+
+    with _AGENT_SESSIONS_LOCK:
+        _REQUEST_SESSION_ALIASES[
+            request_key
+        ] = session_key
+
+    return browser_id, session_key
+
+
+def _session_key(
+    request: gr.Request,
+) -> str:
+    """返回页面已经绑定的稳定会话标识。"""
+
+    request_key = _request_session_key(
+        request
+    )
+
+    with _AGENT_SESSIONS_LOCK:
+        return _REQUEST_SESSION_ALIASES.get(
+            request_key,
+            request_key,
+        )
 
 
 def _get_agent_session(
@@ -225,11 +396,33 @@ def _get_agent_session(
         if existing is not None:
             return existing
 
+        restored_state = None
+        if key.startswith(
+            "conversation-"
+        ):
+            restored_state = (
+                conversation_store.load(
+                    key
+                )
+            )
+
         runner_class = (
-            LangGraphAgentRunner
-            if AGENT_ORCHESTRATOR
-            == "langgraph"
-            else AgentRunner
+            AgentRunner
+            if (
+                restored_state is not None
+                and (
+                    restored_state.pending_task
+                    is not None
+                    or restored_state.pending_confirmation
+                    is not None
+                )
+            )
+            else (
+                LangGraphAgentRunner
+                if AGENT_ORCHESTRATOR
+                == "langgraph"
+                else AgentRunner
+            )
         )
 
         runner = runner_class(
@@ -244,6 +437,7 @@ def _get_agent_session(
             user_id=LOCAL_USER_ID,
             timezone_name=APP_TIMEZONE,
             trace_store=agent_trace_store,
+            session_state=restored_state,
         )
 
         _AGENT_SESSIONS[key] = session
@@ -251,20 +445,47 @@ def _get_agent_session(
         return session
 
 
+def _persist_agent_session(
+    session: TracedConversationSession,
+) -> bool:
+    """保存会话，失败时不影响本轮健康记录操作。"""
+
+    if not session.state.session_id.startswith(
+        "conversation-"
+    ):
+        return False
+
+    try:
+        conversation_store.save(
+            session.state
+        )
+    except (OSError, ValueError):
+        return False
+
+    return True
+
+
 def cleanup_agent_session(
     request: gr.Request,
 ) -> None:
-    """浏览器会话结束时清理短期状态。"""
+    """页面关闭时释放内存，会话继续保存在本地文件。"""
 
-    key = _session_key(
+    request_key = _request_session_key(
         request
     )
 
     with _AGENT_SESSIONS_LOCK:
-        _AGENT_SESSIONS.pop(
-            key,
-            None,
+        stable_key = (
+            _REQUEST_SESSION_ALIASES.pop(
+                request_key,
+                None,
+            )
         )
+        if stable_key is not None:
+            _AGENT_SESSIONS.pop(
+                stable_key,
+                None,
+            )
 
 
 def _result_state_json(
@@ -405,6 +626,455 @@ def _tool_steps_json(
     return safe_steps
 
 
+def _pending_confirmation_content(
+    pending: PendingConfirmation,
+) -> str:
+    """生成对话区内的待确认卡片。"""
+
+    data = pending.draft_data
+    action = pending.action
+
+    if action == "save":
+        record = data.get("preview", {})
+        label = health_event_label(record)
+        title = f"确认{label}记录"
+        summary_html = (
+            '<div class="confirmation-summary">'
+            f"<strong>{escape(format_health_event_summary(record))}</strong>"
+            "<span>确认后将写入你的今日健康记录。</span>"
+            "</div>"
+        )
+        consequence = (
+            "内容确认后只会保存一次。"
+            "取消则不会产生新记录。"
+        )
+    elif action == "update":
+        current = data.get("current_event", {})
+        proposed = data.get("proposed_event", {})
+        label = health_event_label(proposed)
+        title = f"确认修改{label}记录"
+        summary_html = (
+            '<div class="confirmation-compare">'
+            '<div><span>修改前</span>'
+            f"<strong>{escape(format_health_event_summary(current))}</strong></div>"
+            '<div><span>修改后</span>'
+            f"<strong>{escape(format_health_event_summary(proposed))}</strong></div>"
+            "</div>"
+        )
+        consequence = (
+            "确认后将替换原记录。"
+            "取消则保留原内容。"
+        )
+    elif action == "delete":
+        record = data.get("target_event", {})
+        label = health_event_label(record)
+        title = f"确认删除{label}记录"
+        summary_html = (
+            '<div class="confirmation-summary confirmation-summary-danger">'
+            f"<strong>{escape(format_health_event_summary(record))}</strong>"
+            "<span>这条记录将从健康时间线中删除。</span>"
+            "</div>"
+        )
+        consequence = (
+            "删除后无法在页面内撤销。"
+            "如果不确定，请选择取消。"
+        )
+    elif action == "profile_update":
+        preview = data.get("preview", {})
+        after = preview.get("after", {}) if isinstance(preview, dict) else {}
+        style = {
+            "gentle": "温和陪伴",
+            "rational": "理性复盘",
+            "concise": "简洁提醒",
+            "goal_focused": "目标督促",
+        }.get(str(after.get("coach_style", "")), "保持当前风格")
+        label = "档案"
+        title = "确认更新个人档案"
+        summary_html = (
+            '<div class="confirmation-summary">'
+            f"<strong>教练风格：{escape(style)}</strong>"
+            f"<span>时区：{escape(str(after.get('timezone_name', APP_TIMEZONE)))}</span>"
+            "</div>"
+        )
+        consequence = "确认后更新已明确选择的偏好；健康事实和安全规则不会改变。"
+    elif action == "goal_change":
+        preview = data.get("preview", {})
+        after = preview.get("after", {}) if isinstance(preview, dict) else {}
+        label = "目标"
+        title = "确认健康目标变更"
+        summary_html = (
+            '<div class="confirmation-summary">'
+            f"<strong>{escape(str(after.get('title', '健康目标')))}</strong>"
+            f"<span>{escape(str(after.get('target_value', '')))} "
+            f"{escape(str(after.get('unit', '')))} · {escape(str(after.get('period', '')))}</span>"
+            "</div>"
+        )
+        consequence = "确认后生成一个新版本，历史目标不会被覆盖。"
+    elif action == "reminder_create":
+        preview = data.get("preview", {})
+        label = "提醒"
+        title = "确认安排提醒"
+        summary_html = (
+            '<div class="confirmation-summary">'
+            f"<strong>{escape(str(preview.get('content', '健康提醒')))}</strong>"
+            f"<span>{escape(str(preview.get('scheduled_for', '')))} · "
+            f"{escape(str(preview.get('timezone_name', APP_TIMEZONE)))}</span>"
+            "</div>"
+        )
+        consequence = "确认后在本地提醒中心创建一次；重复确认不会重复创建。"
+    else:
+        preview = data.get("preview", {})
+        operation = {
+            "cancel": "取消",
+            "snooze": "延后",
+            "pause": "暂停",
+            "resume": "恢复",
+        }.get(str(preview.get("operation", "")), "修改")
+        label = "提醒"
+        title = f"确认{operation}提醒"
+        summary_html = (
+            '<div class="confirmation-summary">'
+            f"<strong>{escape(operation)}当前提醒</strong>"
+            "<span>确认前提醒状态保持不变。</span>"
+            "</div>"
+        )
+        consequence = "确认后记录状态变化及原因，之后仍可在提醒中心回查。"
+
+    marker = escape(label[:1] or "记")
+
+    return (
+        '<section class="confirmation-card" role="status" '
+        'aria-live="polite">'
+        '<div class="confirmation-title">'
+        f'<i aria-hidden="true">{marker}</i>'
+        "<div>"
+        f"<strong>{escape(title)}</strong>"
+        "<span>请检查下面的信息</span>"
+        "</div>"
+        '<b class="confirmation-status">等待确认</b>'
+        "</div>"
+        f"{summary_html}"
+        f'<p class="confirmation-consequence">{escape(consequence)}</p>'
+        "</section>"
+    )
+
+
+def _confirmation_updates(
+    pending: PendingConfirmation | None,
+) -> tuple[Any, Any, Any]:
+    """同步内联确认卡片和两个操作按钮的可见状态。"""
+
+    if pending is None:
+        return (
+            gr.Markdown(
+                value="",
+                visible=False,
+                sanitize_html=False,
+                container=False,
+            ),
+            gr.Button(visible=False),
+            gr.Button(visible=False),
+        )
+
+    confirm_label = {
+        "save": "确认并保存",
+        "update": "确认修改",
+        "delete": "确认删除",
+        "profile_update": "确认更新档案",
+        "goal_change": "确认目标变更",
+        "reminder_create": "确认安排提醒",
+        "reminder_change": "确认提醒变更",
+    }[pending.action]
+
+    return (
+        gr.Markdown(
+            value=(
+                _pending_confirmation_content(
+                    pending
+                )
+            ),
+            visible=True,
+            sanitize_html=False,
+            container=False,
+        ),
+        gr.Button(
+            value=confirm_label,
+            visible=True,
+            variant=(
+                "stop"
+                if pending.action == "delete"
+                else "primary"
+            ),
+            size="md",
+        ),
+        gr.Button(
+            value="取消",
+            visible=True,
+            variant="secondary",
+            size="md",
+        ),
+    )
+
+
+def _agent_status_text(
+    result: AgentRunResult,
+) -> str:
+    """将内部 Agent 状态转成用户可理解的进度提示。"""
+
+    return {
+        "idle": "可以开始记录。",
+        "running": "正在整理你的信息。",
+        "awaiting_clarification": (
+            "还需要一点信息，请继续回复。"
+        ),
+        "awaiting_confirmation": (
+            "记录已整理好，等待你确认。"
+        ),
+        "completed": "本轮操作已完成。",
+        "failed": (
+            "本轮没有完成，请查看对话中的提示。"
+        ),
+        "cancelled": (
+            "已取消，没有修改健康记录。"
+        ),
+    }.get(
+        result.state.value,
+        "请查看对话中的最新提示。",
+    )
+
+
+def _welcome_chat_history() -> list[dict[str, str]]:
+    """返回新会话的欢迎消息。"""
+
+    return [
+        {
+            "role": "assistant",
+            "content": (
+                "你好，我是小满。你可以告诉我："
+                "“刚喝了 500 毫升水”、"
+                "“跑步 30 分钟”，"
+                "也可以问我今天记录了什么。"
+            ),
+        }
+    ]
+
+
+def _restored_chat_history(
+    session: TracedConversationSession,
+) -> list[dict[str, str]]:
+    """从 Agent 状态恢复用户可见的对话消息。"""
+
+    history: list[dict[str, str]] = []
+
+    for message in session.state.messages:
+        if message.role not in {
+            "user",
+            "assistant",
+        }:
+            continue
+
+        content = message.content
+        marker = "用户原始请求："
+        if (
+            message.role == "user"
+            and content.startswith(
+                "[内部选中记录]"
+            )
+            and marker in content
+        ):
+            content = content.split(
+                marker,
+                maxsplit=1,
+            )[1]
+
+        history.append(
+            {
+                "role": message.role,
+                "content": content,
+            }
+        )
+
+    return history or _welcome_chat_history()
+
+
+def restore_agent_conversation(
+    stored_value: Any,
+    request: gr.Request,
+) -> tuple[Any, ...]:
+    """页面加载时恢复稳定会话、消息和待确认操作。"""
+
+    browser_id, _ = _bind_conversation(
+        stored_value,
+        request,
+    )
+    session = _get_agent_session(request)
+
+    if session is None:
+        return (
+            browser_id,
+            _welcome_chat_history(),
+            AGENT_PROVIDER_STATUS,
+            *_confirmation_updates(None),
+        )
+
+    history = _restored_chat_history(
+        session
+    )
+    visible_message_count = len(history)
+    has_existing_history = (
+        session.state.turn_count > 0
+        or visible_message_count > 1
+    )
+    status = (
+        "已恢复上次对话，"
+        f"共 {visible_message_count} 条消息。"
+        if has_existing_history
+        else "对话已准备好，可以开始记录。"
+    )
+    _persist_agent_session(session)
+
+    return (
+        browser_id,
+        history,
+        status,
+        *_confirmation_updates(
+            session.state.pending_confirmation
+        ),
+    )
+
+
+def begin_agent_activity(
+    user_text: str,
+    selected_record: (
+        dict[str, Any]
+        | None
+    ),
+) -> Any:
+    """用可验证的执行步骤替代默认计时提示。"""
+
+    normalized_text = (
+        user_text.strip()
+        if isinstance(user_text, str)
+        else ""
+    )
+    has_selected_record = bool(
+        isinstance(selected_record, dict)
+        and selected_record.get("event_id")
+    )
+
+    if has_selected_record:
+        steps = (
+            "已关联你选择的健康记录",
+            "正在理解修改内容",
+            "接下来会生成待确认草稿",
+        )
+    elif any(term in normalized_text for term in ("目标", "档案", "教练风格", "偏好")):
+        steps = (
+            "已识别个人设置或目标请求",
+            "正在读取当前版本与历史",
+            "接下来生成可确认的变更草稿",
+        )
+    elif "提醒" in normalized_text:
+        steps = (
+            "已识别提醒行动",
+            "正在核对时间、时区和当前状态",
+            "接下来生成可确认的提醒草稿",
+        )
+    elif any(term in normalized_text for term in ("建议", "健康知识", "怎么吃", "怎么运动")):
+        steps = (
+            "已识别一般健康知识问题",
+            "正在检查安全边界与可信来源",
+            "接下来整理带引用的回答",
+        )
+    elif any(
+        term in normalized_text
+        for term in (
+            "查询",
+            "查看",
+            "多少",
+            "汇总",
+            "今天有哪些",
+        )
+    ):
+        steps = (
+            "已识别查询范围",
+            "正在读取已确认记录",
+            "接下来整理成自然语言结果",
+        )
+    elif any(
+        term in normalized_text
+        for term in (
+            "记录",
+            "喝了",
+            "吃了",
+            "跑步",
+            "体重",
+        )
+    ):
+        steps = (
+            "已识别健康记录请求",
+            "正在检查必要信息",
+            "接下来生成待确认草稿",
+        )
+    else:
+        steps = (
+            "已收到你的问题",
+            "正在选择合适的健康工具",
+            "接下来整理清晰的回答",
+        )
+
+    items = "".join(
+        '<li class="done">'
+        if index == 0
+        else (
+            '<li class="active">'
+            if index == 1
+            else "<li>"
+        )
+        + escape(step)
+        + "</li>"
+        for index, step in enumerate(steps)
+    )
+
+    return gr.Markdown(
+        value=(
+            '<section class="agent-activity" '
+            'role="status" aria-live="polite">'
+            "<strong>小满正在处理</strong>"
+            f"<ol>{items}</ol>"
+            "</section>"
+        ),
+        visible=True,
+        sanitize_html=False,
+        container=False,
+    )
+
+
+def finish_agent_activity(
+    status_text: str,
+) -> Any:
+    """用简洁结果收起本轮执行过程。"""
+
+    normalized_status = (
+        status_text.strip()
+        if isinstance(status_text, str)
+        else "本轮处理已结束。"
+    )
+
+    return gr.Markdown(
+        value=(
+            '<section class="agent-activity complete" '
+            'role="status" aria-live="polite">'
+            "<strong>本轮处理完成</strong>"
+            f"<p>{escape(normalized_status)}</p>"
+            "</section>"
+        ),
+        visible=True,
+        sanitize_html=False,
+        container=False,
+    )
+
+
 def refresh_agent_traces(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
@@ -467,8 +1137,9 @@ def _event_detail(
     ):
         return (
             f"{payload.food.name}，"
-            f"{payload.portion.grams:g}g，"
-            f"{payload.nutrition.calories_kcal:g}kcal"
+            f"{payload.portion.grams:g} g，"
+            "约 "
+            f"{payload.nutrition.calories_kcal:g} kcal"
         )
 
     if isinstance(
@@ -476,8 +1147,8 @@ def _event_detail(
         WaterPayload,
     ):
         return (
-            f"{payload.beverage}，"
-            f"{payload.amount_ml:g}ml"
+            f"{payload.beverage} "
+            f"{payload.amount_ml:g} ml"
             + (
                 f"，{payload.note}"
                 if payload.note
@@ -490,7 +1161,7 @@ def _event_detail(
         WeightPayload,
     ):
         return (
-            f"{payload.weight_kg:g}kg"
+            f"{payload.weight_kg:g} kg"
             + (
                 f"，{payload.note}"
                 if payload.note
@@ -504,18 +1175,22 @@ def _event_detail(
     ):
         details = (
             f"{payload.activity_type}，"
-            f"{payload.duration_minutes:g}分钟"
+            f"{payload.duration_minutes:g} 分钟"
         )
 
         if payload.distance_km is not None:
             details += (
-                f"，{payload.distance_km:g}km"
+                f"，{payload.distance_km:g} km"
             )
 
         if payload.intensity is not None:
             details += (
-                "，强度："
-                f"{payload.intensity.value}"
+                "，"
+                + {
+                    "low": "低强度",
+                    "medium": "中等强度",
+                    "high": "高强度",
+                }[payload.intensity.value]
             )
 
         if payload.note:
@@ -526,6 +1201,48 @@ def _event_detail(
         return details
 
     return "未知事件"
+
+
+def _event_type_label(
+    event: HealthEvent,
+) -> str:
+    """把内部事件类型转换为用户熟悉的名称。"""
+
+    return {
+        "meal": "饮食",
+        "water": "饮水",
+        "weight": "体重",
+        "exercise": "运动",
+    }[event.event_type.value]
+
+
+def _input_source_label(
+    event: HealthEvent,
+) -> str:
+    """把内部录入来源转换为用户可读文本。"""
+
+    return {
+        "chat": "对话记录",
+        "image": "图片记录",
+        "model": "智能整理",
+    }[event.input_source.value]
+
+
+def _record_status(
+    event: HealthEvent,
+    local_timezone: ZoneInfo,
+) -> str:
+    """区分首次确认和后续修改。"""
+
+    if event.updated_at == event.created_at:
+        return "已确认"
+
+    updated_text = (
+        event.updated_at
+        .astimezone(local_timezone)
+        .strftime("%m月%d日 %H:%M")
+    )
+    return f"已修改，{updated_text}"
 
 
 def _timeline_rows(
@@ -551,31 +1268,24 @@ def _timeline_rows(
 
         rows.append(
             [
-                str(event.event_id),
                 (
                     event.occurred_at
                     .astimezone(
                         local_timezone
                     )
                     .strftime(
-                        "%Y-%m-%d "
-                        "%H:%M:%S"
+                        "%m月%d日 "
+                        "%H:%M"
                     )
                 ),
-                event.event_type.value,
+                _event_type_label(event),
                 _event_detail(
                     event
                 ),
-                event.input_source.value,
-                (
-                    event.updated_at
-                    .astimezone(
-                        local_timezone
-                    )
-                    .strftime(
-                        "%Y-%m-%d "
-                        "%H:%M:%S"
-                    )
+                _input_source_label(event),
+                _record_status(
+                    event,
+                    local_timezone,
                 ),
             ]
         )
@@ -585,40 +1295,136 @@ def _timeline_rows(
 
 def _summary_markdown(
     summary: dict[str, Any],
+    goal_gaps: list[dict[str, Any]] | None = None,
 ) -> str:
-    """将每日汇总转换为 Markdown。"""
+    """将每日汇总转换为可视化指标卡。"""
 
     meal = summary["meal"]
     water = summary["water"]
     weight = summary["weight"]
     exercise = summary["exercise"]
 
-    latest_weight = (
-        f"{weight['latest_weight_kg']:g} kg"
+    event_count = int(
+        summary["event_count"]
+    )
+
+    event_status = (
+        f"{event_count} 条已确认记录"
+        if event_count
+        else "今天还没有记录"
+    )
+
+    latest_weight_value = (
+        f"{weight['latest_weight_kg']:g}"
         if weight["latest_weight_kg"]
         is not None
-        else "无记录"
+        else "暂无"
+    )
+
+    latest_weight_unit = (
+        "kg"
+        if weight["latest_weight_kg"]
+        is not None
+        else "暂无记录"
+    )
+
+    calories = float(
+        meal["calories_kcal"]
+    )
+
+    water_ml = float(
+        water["total_ml"]
+    )
+
+    exercise_minutes = float(
+        exercise[
+            "total_duration_minutes"
+        ]
+    )
+
+    goal_by_type: dict[str, dict[str, Any]] = {}
+    for item in (goal_gaps or []):
+        unit = str(item.get("unit", "")).lower()
+        if unit in {"ml", "毫升"}:
+            goal_by_type["water"] = item
+        elif unit in {"分钟", "min", "minutes"}:
+            goal_by_type["exercise"] = item
+        elif unit in {"kcal", "千卡"}:
+            goal_by_type["nutrition"] = item
+    calorie_target = float(goal_by_type.get("nutrition", {}).get("target_value", 2000))
+    water_target = float(goal_by_type.get("water", {}).get("target_value", 1800))
+    exercise_target = float(goal_by_type.get("exercise", {}).get("target_value", 60))
+
+    calorie_progress = min(
+        calories / calorie_target * 100,
+        100,
+    ) if calorie_target > 0 else 0
+
+    water_progress = min(
+        water_ml / water_target * 100,
+        100,
+    ) if water_target > 0 else 0
+
+    exercise_progress = min(
+        exercise_minutes / exercise_target * 100,
+        100,
+    ) if exercise_target > 0 else 0
+
+    weight_progress = (
+        72
+        if weight["latest_weight_kg"]
+        is not None
+        else 0
     )
 
     return (
-        "### 每日确定性汇总\n\n"
-        f"- 日期：`{summary['summary_date']}`\n"
-        f"- 时区：`{summary['timezone']}`\n"
-        f"- 健康事件总数：{summary['event_count']}\n"
-        f"- 饮食：{meal['count']} 条，"
-        f"{meal['calories_kcal']:.2f} kcal，"
-        f"蛋白质 {meal['protein_g']:.2f} g，"
-        f"脂肪 {meal['fat_g']:.2f} g，"
-        f"碳水 {meal['carbs_g']:.2f} g\n"
-        f"- 饮水：{water['count']} 条，"
-        f"共 {water['total_ml']:.2f} ml\n"
-        f"- 体重：{weight['count']} 条，"
-        f"最近一次 {latest_weight}\n"
-        f"- 运动：{exercise['count']} 条，"
-        f"共 {exercise['total_duration_minutes']:.2f} 分钟，"
-        f"{exercise['total_distance_km']:.2f} km\n\n"
-        "**所有汇总均来自已保存事件；"
-        "仅供学习，不构成医疗建议。**"
+        '<section class="summary-board">'
+        '<div class="summary-topline">'
+        '<b>今日健康概览</b>'
+        f'<span>{event_status}</span>'
+        '</div>'
+        '<div class="metric-grid">'
+        '<article class="health-metric" '
+        'style="--metric-color:#2f765e;'
+        f'--metric-progress:{calorie_progress:.1f}%">'
+        '<label>饮食热量 · 估算</label>'
+        f'<strong>{calories:.0f}</strong><small>kcal</small>'
+        '<div class="metric-track"><i></i></div>'
+        f'<small>{meal["count"]} 顿已确认餐食</small>'
+        '</article>'
+        '<article class="health-metric" '
+        'style="--metric-color:#2f765e;'
+        f'--metric-progress:{water_progress:.1f}%">'
+        '<label>今日饮水</label>'
+        f'<strong>{water_ml:.0f}</strong><small>ml</small>'
+        '<div class="metric-track"><i></i></div>'
+        f'<small>目标 {water_target:g} ml</small>'
+        '</article>'
+        '<article class="health-metric" '
+        'style="--metric-color:#2f765e;'
+        f'--metric-progress:{exercise_progress:.1f}%">'
+        '<label>运动时长</label>'
+        f'<strong>{exercise_minutes:.0f}</strong><small>分钟</small>'
+        '<div class="metric-track"><i></i></div>'
+        f'<small>目标 {exercise_target:g} 分钟 · {exercise["total_distance_km"]:.1f} km</small>'
+        '</article>'
+        '<article class="health-metric" '
+        'style="--metric-color:#2f765e;'
+        f'--metric-progress:{weight_progress}%">'
+        '<label>最近体重</label>'
+        f'<strong>{latest_weight_value}</strong>'
+        f'<small>{latest_weight_unit}</small>'
+        '<div class="metric-track"><i></i></div>'
+        f'<small>{weight["count"]} 次记录</small>'
+        '</article>'
+        '</div>'
+        '<div class="summary-note">'
+        f'统计日期 {summary["summary_date"]} · '
+        f'{summary["timezone"]}。'
+        '所有数值只来自已确认记录；热量为可追溯估算，'
+        '不构成医疗建议。'
+        '</div>'
+        '</section>'
     )
 
 
@@ -639,11 +1445,12 @@ def refresh_today() -> tuple[
             ),
         )
 
-    result = get_daily_health_summary(
+    result = get_healthos_daily_summary(
         user_id=LOCAL_USER_ID,
         date=today,
         timezone_name=APP_TIMEZONE,
         store=event_store,
+        healthos_store=healthos_store,
     )
 
     if not result["ok"]:
@@ -664,7 +1471,415 @@ def refresh_today() -> tuple[
             data["events"]
         ),
         _summary_markdown(
-            data["summary"]
+            data["summary"],
+            data.get("goal_gaps", []),
+        ),
+    )
+
+
+_COACH_STYLE_LABELS = {
+    "gentle": "温和陪伴",
+    "rational": "理性复盘",
+    "concise": "简洁提醒",
+    "goal_focused": "目标督促",
+}
+
+_GOAL_STATUS_LABELS = {
+    "active": "进行中",
+    "paused": "已暂停",
+    "completed": "已完成",
+}
+
+_GOAL_PERIOD_LABELS = {
+    "daily": "每天",
+    "weekly": "每周",
+    "monthly": "每月",
+    "8_weeks": "8 周",
+}
+
+_REMINDER_STATUS_LABELS = {
+    "scheduled": "已安排",
+    "fired": "已触发",
+    "completed": "已完成",
+    "snoozed": "已延后",
+    "paused": "已暂停",
+    "cancelled": "已取消",
+    "failed": "执行失败",
+}
+
+
+def _profile_markdown(profile: dict[str, Any]) -> str:
+    """将最小档案转换为用户可读设置摘要。"""
+
+    style = _COACH_STYLE_LABELS.get(
+        str(profile.get("coach_style", "gentle")),
+        "温和陪伴",
+    )
+    preferences = profile.get("dietary_preferences") or []
+    exclusions = profile.get("exclusions") or []
+    quiet_start = profile.get("quiet_hours_start")
+    quiet_end = profile.get("quiet_hours_end")
+    quiet_text = (
+        f"{quiet_start}—{quiet_end}"
+        if quiet_start and quiet_end
+        else "未设置"
+    )
+    reminder_text = "开启" if profile.get("reminders_enabled", True) else "关闭"
+    return (
+        '<section class="profile-summary">'
+        '<div><span>教练风格</span>'
+        f'<strong>{escape(style)}</strong></div>'
+        '<div><span>时区</span>'
+        f'<strong>{escape(str(profile.get("timezone_name", APP_TIMEZONE)))}</strong></div>'
+        '<div><span>提醒</span>'
+        f'<strong>{reminder_text}</strong><small>免打扰 {escape(quiet_text)}</small></div>'
+        '<div><span>饮食偏好</span>'
+        f'<strong>{escape("、".join(preferences) if preferences else "未设置")}</strong>'
+        f'<small>忌口：{escape("、".join(exclusions) if exclusions else "未设置")}</small></div>'
+        '</section>'
+    )
+
+
+def _goal_rows(goals: list[dict[str, Any]]) -> list[list[Any]]:
+    """目标表格只展示业务含义，不展示内部 ID。"""
+
+    rows: list[list[Any]] = []
+    for goal in goals:
+        versions = goal.get("versions") or []
+        if not versions:
+            continue
+        current = versions[-1]
+        created = str(current.get("created_at", ""))
+        rows.append(
+            [
+                current.get("title", "健康目标"),
+                f"{current.get('target_value', '')} {current.get('unit', '')}",
+                _GOAL_PERIOD_LABELS.get(str(current.get("period", "")), str(current.get("period", ""))),
+                _GOAL_STATUS_LABELS.get(str(current.get("status", "")), str(current.get("status", ""))),
+                f"第 {current.get('version', len(versions))} 版",
+                created[:10] if created else "—",
+            ]
+        )
+    return rows
+
+
+def _reminder_rows(reminders: list[dict[str, Any]]) -> list[list[Any]]:
+    """提醒表格隐藏内部标识和确认令牌。"""
+
+    rows: list[list[Any]] = []
+    for reminder in reminders:
+        scheduled = str(reminder.get("scheduled_for", ""))
+        try:
+            scheduled_text = datetime.fromisoformat(scheduled).astimezone(_timezone()).strftime("%m月%d日 %H:%M")
+        except (ValueError, TypeError):
+            scheduled_text = scheduled or "时间未知"
+        rows.append(
+            [
+                reminder.get("content", "健康提醒"),
+                scheduled_text,
+                _REMINDER_STATUS_LABELS.get(
+                    str(reminder.get("status", "")),
+                    str(reminder.get("status", "")),
+                ),
+                reminder.get("timezone_name", APP_TIMEZONE),
+                len(reminder.get("transitions") or []),
+            ]
+        )
+    return rows
+
+
+def _checkin_markdown(
+    period: dict[str, Any],
+    goals: list[dict[str, Any]],
+) -> str:
+    """分开呈现事实、数据完整度和下一步，不推断因果。"""
+
+    days = int(period.get("period", {}).get("days", 7))
+    completeness = float(period.get("data_completeness", 0))
+    exercise = period.get("exercise", {})
+    water = period.get("water", {})
+    meal = period.get("meal", {})
+    weight = period.get("weight", {})
+    active_goals = [
+        goal for goal in goals
+        if goal.get("versions") and goal["versions"][-1].get("status") == "active"
+    ]
+    if not period.get("event_count"):
+        action = "先记录一件最容易的事，例如今天喝了多少水。"
+    elif completeness < 0.5:
+        action = "记录覆盖还不完整，继续记录几天后再看趋势会更可靠。"
+    elif active_goals:
+        action = f"回看“{active_goals[0]['versions'][-1].get('title', '当前目标')}”并记录今天的进度。"
+    else:
+        action = "可以创建一个可衡量的健康目标，让后续复盘有明确参照。"
+    change = weight.get("change_kg")
+    change_text = "证据不足" if change is None else f"{change:+g} kg"
+    return (
+        '<section class="checkin-summary">'
+        '<div class="checkin-facts">'
+        f'<strong>最近 {days} 天的已记录事实</strong>'
+        '<ul>'
+        f'<li>运动 {float(exercise.get("total_minutes", 0)):g} 分钟</li>'
+        f'<li>饮水 {float(water.get("total_ml", 0)):g} ml</li>'
+        f'<li>餐食 {int(meal.get("count", 0))} 次，已记录热量约 {float(meal.get("calories_kcal", 0)):g} kcal</li>'
+        f'<li>体重变化：{escape(change_text)}</li>'
+        '</ul></div>'
+        '<div class="checkin-evidence">'
+        f'<span>数据完整度</span><strong>{completeness * 100:.0f}%</strong>'
+        f'<small>{int(period.get("days_with_data", 0))}/{days} 天有记录</small></div>'
+        '<div class="checkin-action"><span>建议下一步</span>'
+        f'<strong>{escape(action)}</strong></div>'
+        '<p>这里只陈述已保存记录；数据不足时不推断体重或饮食变化的原因。</p>'
+        '</section>'
+    )
+
+
+def refresh_healthos_dashboard(period_days: int = 7) -> tuple[Any, ...]:
+    """刷新档案、目标、周期复盘和本地提醒。"""
+
+    profile_result = get_user_profile(
+        user_id=LOCAL_USER_ID,
+        timezone_name=APP_TIMEZONE,
+        store=healthos_store,
+    )
+    goals_result = get_health_goals(
+        user_id=LOCAL_USER_ID,
+        store=healthos_store,
+    )
+    period_result = get_period_summary(
+        user_id=LOCAL_USER_ID,
+        days=int(period_days),
+        end_date=None,
+        timezone_name=APP_TIMEZONE,
+        store=event_store,
+        healthos_store=healthos_store,
+    )
+    reminders_result = list_or_cancel_reminders(
+        user_id=LOCAL_USER_ID,
+        action="list",
+        idempotency_key="ui-read-only",
+        store=healthos_store,
+    )
+    results = [profile_result, goals_result, period_result, reminders_result]
+    failed = next((item for item in results if not item.get("ok")), None)
+    if failed is not None:
+        error = failed.get("error") or {}
+        status = _error_text(
+            str(error.get("error_code", "HEALTHOS_READ_ERROR")),
+            str(error.get("message", "无法读取 HealthOS 数据")),
+        )
+        return status, [], status, [], status
+
+    profile = profile_result["data"]["profile"]
+    goals = goals_result["data"]["goals"]
+    period = period_result["data"]
+    reminders = reminders_result["data"]["reminders"]
+    return (
+        _profile_markdown(profile),
+        _goal_rows(goals),
+        _checkin_markdown(period, goals),
+        _reminder_rows(reminders),
+        f"已读取 {len(reminders)} 条本地提醒；取消、延后、暂停和恢复都需要确认。",
+    )
+
+
+def open_healthos_action(prompt: str) -> tuple[Any, str, dict[str, Any], Any]:
+    """从目标或提醒页面进入统一对话入口。"""
+
+    return (
+        gr.Tabs(selected="chat"),
+        prompt,
+        {},
+        gr.Markdown(value="", visible=False, sanitize_html=False, container=False),
+    )
+
+
+def open_profile_settings() -> tuple[Any, str, dict[str, Any], Any]:
+    return open_healthos_action("请先显示我的个人设置，我想调整教练风格或提醒偏好。")
+
+
+def open_goal_creation() -> tuple[Any, str, dict[str, Any], Any]:
+    return open_healthos_action("我想创建一个健康目标：")
+
+
+def open_goal_management() -> tuple[Any, str, dict[str, Any], Any]:
+    return open_healthos_action("请先列出我的健康目标，我想调整、暂停或恢复其中一个。")
+
+
+def open_period_review() -> tuple[Any, str, dict[str, Any], Any]:
+    return open_healthos_action("请根据我最近的已确认记录和目标做一次复盘，分开说明事实、数据不足和建议。")
+
+
+def open_knowledge_question() -> tuple[Any, str, dict[str, Any], Any]:
+    return open_healthos_action("我想询问一个一般健康生活问题，请给出可信来源：")
+
+
+def open_reminder_creation() -> tuple[Any, str, dict[str, Any], Any]:
+    return open_healthos_action("我想创建一个提醒：")
+
+
+def open_reminder_management() -> tuple[Any, str, dict[str, Any], Any]:
+    return open_healthos_action("请列出我的提醒，我想延后、暂停、恢复或取消其中一个。")
+
+
+def _tool_contract_rows() -> list[list[str]]:
+    """为开发者证据页展示 15 个工具的安全契约。"""
+
+    boundaries = {
+        "get_user_profile": "最小字段",
+        "prepare_profile_update": "确认后写入",
+        "get_health_goals": "含版本历史",
+        "prepare_goal_change": "确认后追加版本",
+        "get_health_events": "仅 committed 事实",
+        "prepare_health_event": "缺参追问",
+        "prepare_event_change": "展示前后对比",
+        "retrieve_nutrition_candidates": "Top-K 与来源",
+        "calculate_nutrition": "确定性公式",
+        "retrieve_health_knowledge": "引用与拒答",
+        "get_daily_summary": "当天事实与完整度",
+        "get_period_summary": "7/14/30 天、不推因果",
+        "create_reminder_draft": "确认前不安排",
+        "execute_reminder": "令牌与幂等键",
+        "list_or_cancel_reminders": "写操作生成草稿",
+    }
+    risk_labels = {
+        "read": "读取",
+        "draft": "草稿",
+        "retrieval": "检索",
+        "calculation": "计算",
+        "write": "写入",
+        "read_or_draft": "读取/草稿",
+    }
+    return [
+        [
+            name,
+            risk_labels.get(str(tool_router.tool_contracts[name]["risk_level"]), "受控"),
+            f"{boundaries[name]} · {tool_router.tool_contracts[name]['timeout_seconds']}s 预算",
+        ]
+        for name in tool_router.available_tools
+    ]
+
+
+def _selected_record_content(
+    event: HealthEvent,
+) -> str:
+    """生成从每日记录进入对话后的编辑上下文。"""
+
+    occurred_at = (
+        event.occurred_at
+        .astimezone(_timezone())
+        .strftime("%m月%d日 %H:%M")
+    )
+    summary = _event_detail(event)
+
+    return (
+        '<section class="selected-record-card" '
+        'role="status" aria-live="polite">'
+        '<div><span>正在修改</span>'
+        f'<strong>{escape(_event_type_label(event))}记录</strong></div>'
+        f'<p>{escape(occurred_at)}，{escape(summary)}</p>'
+        '<small>请在输入框说明要改成什么。保存前仍会请你确认。</small>'
+        "</section>"
+    )
+
+
+def open_today_record_in_chat(
+    event: gr.SelectData,
+) -> tuple[Any, str, dict[str, str], Any]:
+    """选择今日记录后进入对话修改流程。"""
+
+    raw_index = event.index
+    row_index = (
+        raw_index[0]
+        if isinstance(
+            raw_index,
+            (list, tuple),
+        )
+        else raw_index
+    )
+
+    try:
+        selected_index = int(row_index)
+        today = _today_string()
+    except (TypeError, ValueError):
+        return (
+            gr.Tabs(selected="today"),
+            "",
+            {},
+            gr.Markdown(
+                value=(
+                    "没有识别到这条记录，"
+                    "请刷新今日记录后重试。"
+                ),
+                visible=True,
+            ),
+        )
+
+    result = get_daily_health_summary(
+        user_id=LOCAL_USER_ID,
+        date=today,
+        timezone_name=APP_TIMEZONE,
+        store=event_store,
+    )
+    events = (
+        result.get("data", {}).get(
+            "events",
+            [],
+        )
+        if result.get("ok")
+        else []
+    )
+
+    if not (
+        0 <= selected_index < len(events)
+    ):
+        return (
+            gr.Tabs(selected="today"),
+            "",
+            {},
+            gr.Markdown(
+                value=(
+                    "这条记录刚刚发生了变化，"
+                    "请刷新后重新选择。"
+                ),
+                visible=True,
+            ),
+        )
+
+    selected_event = (
+        HealthEvent.model_validate(
+            events[selected_index]
+        )
+    )
+    occurred_at = (
+        selected_event.occurred_at
+        .astimezone(_timezone())
+        .strftime("%m月%d日 %H:%M")
+    )
+    selected_state = {
+        "event_id": str(
+            selected_event.event_id
+        ),
+        "event_type": (
+            selected_event.event_type.value
+        ),
+        "occurred_at": occurred_at,
+        "summary": _event_detail(
+            selected_event
+        ),
+    }
+
+    return (
+        gr.Tabs(selected="chat"),
+        "请把这条记录修改为：",
+        selected_state,
+        gr.Markdown(
+            value=_selected_record_content(
+                selected_event
+            ),
+            visible=True,
+            sanitize_html=False,
+            container=False,
         ),
     )
 
@@ -1185,8 +2400,8 @@ def confirm_meal_save(
         )
     else:
         status = (
-            "饮食记录成功："
-            f"{result['data']['event']['event_id']}"
+            "饮食记录已保存。"
+            "今日概览已同步更新。"
         )
 
     return (
@@ -1224,18 +2439,24 @@ def send_chat_message(
         list[dict[str, Any]]
         | None
     ),
+    selected_record: (
+        dict[str, Any]
+        | None
+    ),
     request: gr.Request,
-) -> tuple[
-    list[dict[str, Any]],
-    str,
-    str,
-    list[dict[str, Any]],
-    dict[str, Any],
-]:
+) -> tuple[Any, ...]:
     """向当前浏览器的 Agent Session 发送消息。"""
 
     chat_history = list(
         history or []
+    )
+    selected_state = (
+        dict(selected_record)
+        if isinstance(
+            selected_record,
+            dict,
+        )
+        else {}
     )
 
     normalized_text = (
@@ -1248,12 +2469,18 @@ def send_chat_message(
     )
 
     if not normalized_text:
+        confirmation_updates = (
+            _confirmation_updates(None)
+        )
         return (
             chat_history,
             "",
             "请输入内容。",
             [],
             {},
+            *confirmation_updates,
+            selected_state,
+            gr.skip(),
         )
 
     chat_history.append(
@@ -1292,11 +2519,50 @@ def send_chat_message(
                     "provider_disabled"
                 )
             },
+            *_confirmation_updates(None),
+            selected_state,
+            gr.skip(),
+        )
+
+    model_text = normalized_text
+    selected_event_id = str(
+        selected_state.get(
+            "event_id",
+            "",
+        )
+    ).strip()
+    is_edit_request = any(
+        term in normalized_text
+        for term in (
+            "修改",
+            "改成",
+            "改为",
+            "删除",
+            "移除",
+            "这条记录",
+        )
+    )
+    if not is_edit_request:
+        selected_event_id = ""
+    elif selected_event_id:
+        try:
+            UUID(selected_event_id)
+        except ValueError:
+            selected_event_id = ""
+
+    if selected_event_id:
+        model_text = (
+            "[内部选中记录]\n"
+            f"event_id={selected_event_id}\n"
+            "请仅将该标识用于工具调用，"
+            "不得在回答中展示。\n"
+            "用户原始请求："
+            f"{normalized_text}"
         )
 
     try:
         result = session.send(
-            normalized_text
+            model_text
         )
 
     except AgentProviderError as exc:
@@ -1329,6 +2595,11 @@ def send_chat_message(
                     ),
                 },
             },
+            *_confirmation_updates(
+                session.state.pending_confirmation
+            ),
+            selected_state,
+            gr.skip(),
         )
 
     except Exception as exc:
@@ -1361,30 +2632,50 @@ def send_chat_message(
                     ),
                 },
             },
+            *_confirmation_updates(
+                session.state.pending_confirmation
+            ),
+            selected_state,
+            gr.skip(),
+        )
+
+    _persist_agent_session(session)
+
+    visible_answer = result.answer
+    if result.pending_confirmation is not None:
+        visible_answer = (
+            "我已经整理好这条健康记录。"
+            "请在下方核对内容，"
+            "确认后才会写入。"
         )
 
     chat_history.append(
         {
             "role": "assistant",
-            "content": result.answer,
+            "content": visible_answer,
         }
     )
 
     return (
         chat_history,
         "",
-        (
-            f"状态：{result.state.value}；"
-            "结束原因："
-            f"{result.finish_reason.value}；"
-            f"模型轮次：{result.model_rounds}"
-        ),
+        _agent_status_text(result),
         _tool_steps_json(
             result
         ),
         _result_state_json(
             session=session,
             result=result,
+        ),
+        *_confirmation_updates(
+            session.state.pending_confirmation
+        ),
+        {},
+        gr.Markdown(
+            value="",
+            visible=False,
+            sanitize_html=False,
+            container=False,
         ),
     )
 
@@ -1395,14 +2686,7 @@ def confirm_agent_action(
         | None
     ),
     request: gr.Request,
-) -> tuple[
-    list[dict[str, Any]],
-    str,
-    list[dict[str, Any]],
-    dict[str, Any],
-    list[list[Any]],
-    str,
-]:
+) -> tuple[Any, ...]:
     """用户点击按钮后确认 Agent 草稿。"""
 
     chat_history = list(
@@ -1439,6 +2723,7 @@ def confirm_agent_action(
             },
             rows,
             summary,
+            *_confirmation_updates(None),
         )
 
     try:
@@ -1477,7 +2762,12 @@ def confirm_agent_action(
             },
             rows,
             summary,
+            *_confirmation_updates(
+                session.state.pending_confirmation
+            ),
         )
+
+    _persist_agent_session(session)
 
     chat_history.append(
         {
@@ -1490,11 +2780,7 @@ def confirm_agent_action(
 
     return (
         chat_history,
-        (
-            f"状态：{result.state.value}；"
-            "结束原因："
-            f"{result.finish_reason.value}"
-        ),
+        _agent_status_text(result),
         _tool_steps_json(
             result
         ),
@@ -1504,6 +2790,9 @@ def confirm_agent_action(
         ),
         rows,
         summary,
+        *_confirmation_updates(
+            session.state.pending_confirmation
+        ),
     )
 
 
@@ -1513,12 +2802,7 @@ def cancel_agent_action(
         | None
     ),
     request: gr.Request,
-) -> tuple[
-    list[dict[str, Any]],
-    str,
-    list[dict[str, Any]],
-    dict[str, Any],
-]:
+) -> tuple[Any, ...]:
     """取消 Agent pending_task 或待确认草稿。"""
 
     chat_history = list(
@@ -1551,6 +2835,7 @@ def cancel_agent_action(
                     "provider_disabled"
                 )
             },
+            *_confirmation_updates(None),
         )
 
     try:
@@ -1585,7 +2870,12 @@ def cancel_agent_action(
                     ),
                 },
             },
+            *_confirmation_updates(
+                session.state.pending_confirmation
+            ),
         )
+
+    _persist_agent_session(session)
 
     chat_history.append(
         {
@@ -1596,11 +2886,7 @@ def cancel_agent_action(
 
     return (
         chat_history,
-        (
-            f"状态：{result.state.value}；"
-            "结束原因："
-            f"{result.finish_reason.value}"
-        ),
+        _agent_status_text(result),
         _tool_steps_json(
             result
         ),
@@ -1608,34 +2894,37 @@ def cancel_agent_action(
             session=session,
             result=result,
         ),
+        *_confirmation_updates(
+            session.state.pending_confirmation
+        ),
     )
 
 
 def reset_agent_conversation(
     request: gr.Request,
-) -> tuple[
-    list[dict[str, str]],
-    str,
-    list[dict[str, Any]],
-    dict[str, Any],
-]:
-    """清空当前浏览器的短期对话状态。"""
+) -> tuple[Any, ...]:
+    """清空当前浏览器绑定的本地对话状态。"""
 
-    cleanup_agent_session(
-        request
-    )
+    session_key = _session_key(request)
+
+    with _AGENT_SESSIONS_LOCK:
+        _AGENT_SESSIONS.pop(
+            session_key,
+            None,
+        )
+
+    if session_key.startswith(
+        "conversation-"
+    ):
+        try:
+            conversation_store.delete(
+                session_key
+            )
+        except (OSError, ValueError):
+            pass
 
     return (
-        [
-            {
-                "role": "assistant",
-                "content": (
-                    "会话已重置。"
-                    "你可以记录饮水、体重、"
-                    "运动，或者查询时间线。"
-                ),
-            }
-        ],
+        _welcome_chat_history(),
         "会话已重置。",
         [],
         {
@@ -1648,11 +2937,19 @@ def reset_agent_conversation(
                 ),
             },
         },
+        *_confirmation_updates(None),
+        {},
+        gr.Markdown(
+            value="",
+            visible=False,
+            sanitize_html=False,
+            container=False,
+        ),
     )
 
 
 def build_demo() -> gr.Blocks:
-    """构建完整的单页多 Tab 应用。"""
+    """构建小满健康助理单页应用。"""
 
     initial_date = (
         _today_string()
@@ -1661,361 +2958,813 @@ def build_demo() -> gr.Blocks:
     )
 
     with gr.Blocks(
-        title=(
-            "个人健康管理助理 Agent"
-        ),
+        title="小满 · 个人健康助理",
         fill_width=True,
     ) as demo:
-        gr.Markdown(
-            "# 个人健康管理助理 Agent\n\n"
-            "支持饮食、饮水、体重和运动记录；"
-            "所有写操作都必须先预览并确认。"
-            "本项目仅用于学习，不构成医疗建议。"
+        browser_conversation_id = gr.BrowserState(
+            default_value="",
+            storage_key=(
+                "xiaoman-health-conversation"
+            ),
+        )
+        selected_record_state = gr.State(
+            value={}
         )
 
-        with gr.Tab("今天"):
-            refresh_today_button = gr.Button(
-                "刷新今天",
-                variant="secondary",
-            )
+        gr.Markdown(
+            """
+            <header class="brand-shell">
+              <div class="brand-lockup">
+                <div class="brand-mark"><i>小</i><span>XIAOMAN</span></div>
+                <div class="brand-message">
+                  <h1>小满健康助手</h1>
+                  <p>记录饮食、饮水、体重和运动。每次写入都由你确认。</p>
+                </div>
+              </div>
+              <aside class="brand-aside">
+                <div class="brand-aside-label"><i></i> 本地模式</div>
+                <strong>数据保存在这台设备</strong>
+                <small>确认后才写入，随时可以查询、修改或删除。</small>
+              </aside>
+            </header>
+            """,
+            sanitize_html=False,
+            container=False,
+        )
 
-            today_table = gr.Dataframe(
-                headers=[
-                    "event_id",
-                    "occurred_at",
-                    "event_type",
-                    "detail",
-                    "input_source",
-                    "updated_at",
-                ],
-                datatype=[
-                    "str",
-                    "str",
-                    "str",
-                    "str",
-                    "str",
-                    "str",
-                ],
-                value=[],
-                interactive=False,
-                label="今天的已保存事件",
-            )
+        gr.Markdown(
+            """
+            <div class="safety-strip"><i></i>
+              小满用于个人健康记录与学习演示，不提供医疗诊断、治疗或紧急医疗服务。
+            </div>
+            """,
+            sanitize_html=False,
+            container=False,
+        )
 
-            today_summary = gr.Markdown(
-                "正在读取今天的汇总……"
-            )
-
-        with gr.Tab("对话"):
-            gr.Markdown(
-                "## Agent 对话\n\n"
-                f"{AGENT_PROVIDER_STATUS}\n\n"
-                "饮食营养仍建议使用“饮食确认”"
-                "Tab 完成候选选择与确定性计算。"
-            )
-
-            chatbot = gr.Chatbot(
-                value=[
-                    {
-                        "role": "assistant",
-                        "content": (
-                            "你好。你可以说："
-                            "“记录喝水500毫升”、"
-                            "“我跑步了30分钟”、"
-                            "“今天喝了多少水”。"
-                        ),
-                    }
-                ],
-                height=520,
-                label="对话",
-            )
-
-            chat_input = gr.Textbox(
-                label="输入消息",
-                placeholder=(
-                    "例如：记录跑步，"
-                    "或查询今天的饮水记录"
-                ),
-                lines=2,
-            )
-
-            with gr.Row():
-                send_button = gr.Button(
-                    "发送",
-                    variant="primary",
-                )
-
-                confirm_agent_button = gr.Button(
-                    "确认当前操作",
-                    variant="primary",
-                )
-
-                cancel_agent_button = gr.Button(
-                    "取消当前操作",
-                    variant="stop",
-                )
-
-                reset_agent_button = gr.Button(
-                    "重置会话",
-                    variant="secondary",
-                )
-
-            agent_status = gr.Markdown(
-                AGENT_PROVIDER_STATUS
-            )
-
-        with gr.Tab("健康时间线"):
-            with gr.Row():
-                timeline_date = gr.Textbox(
-                    label=(
-                        "日期 "
-                        "(YYYY-MM-DD)"
-                    ),
-                    value=initial_date,
-                )
-
-                timeline_event_type = (
-                    gr.Dropdown(
-                        label="事件类型",
-                        choices=[
-                            ("全部", ""),
-                            ("饮食", "meal"),
-                            ("饮水", "water"),
-                            ("体重", "weight"),
-                            ("运动", "exercise"),
-                        ],
-                        value="",
+        with gr.Tabs(
+            elem_id="main-tabs",
+            selected="today",
+        ) as main_tabs:
+            with gr.Tab(
+                "今日概览",
+                id="today",
+            ):
+                with gr.Column(elem_classes="page-wrap"):
+                    gr.Markdown(
+                        """
+                        <div class="page-title">
+                          <h2>今天，先照顾好自己。</h2>
+                          <p>这里只展示已经确认的健康事实，草稿和取消操作不会进入统计。</p>
+                        </div>
+                        """,
+                        sanitize_html=False,
+                        container=False,
                     )
-                )
 
-                refresh_timeline_button = (
-                    gr.Button(
-                        "查询时间线",
-                        variant="primary",
+                    with gr.Row(equal_height=True):
+                        with gr.Column(scale=3, min_width=520):
+                            today_summary = gr.Markdown(
+                                "正在读取今天的汇总……",
+                                sanitize_html=False,
+                                container=False,
+                            )
+
+                        with gr.Column(
+                            scale=1,
+                            min_width=230,
+                            elem_classes="day-prompt",
+                        ):
+                            gr.Markdown(
+                                """
+                                <div class="prompt-orbit">记</div>
+                                <strong>记录，不必很费力</strong>
+                                <p>一句“刚喝了 500ml 水”，小满会帮你整理成结构化草稿，确认后再保存。</p>
+                                """,
+                                sanitize_html=False,
+                                container=False,
+                            )
+
+                    with gr.Column(elem_classes="care-card"):
+                        with gr.Row():
+                            gr.Markdown(
+                                """
+                              <div>
+                                  <div class="section-heading">今天的记录</div>
+                                  <p class="section-copy">点击任意记录即可进入对话修改，保存前仍需要确认。</p>
+                              </div>
+                                """,
+                                sanitize_html=False,
+                                container=False,
+                            )
+                            refresh_today_button = gr.Button(
+                                "刷新今日",
+                                variant="secondary",
+                                size="sm",
+                                scale=0,
+                            )
+
+                        today_table = gr.Dataframe(
+                            headers=[
+                                "时间",
+                                "记录类型",
+                                "记录内容",
+                                "记录来源",
+                                "状态",
+                            ],
+                            datatype=[
+                                "str",
+                                "str",
+                                "str",
+                                "str",
+                                "str",
+                            ],
+                            value=[],
+                            interactive=False,
+                            show_label=False,
+                            max_height=360,
+                            wrap=True,
+                            elem_classes="timeline-table",
+                        )
+
+            with gr.Tab(
+                "和小满聊聊",
+                id="chat",
+            ):
+                with gr.Column(elem_classes="page-wrap"):
+                    gr.Markdown(
+                        """
+                        <div class="page-title">
+                          <h2>像聊天一样，完成健康记录。</h2>
+                          <p>告诉我发生了什么。信息不完整时我会继续询问，写入前始终等待你的确认。</p>
+                        </div>
+                        """,
+                        sanitize_html=False,
+                        container=False,
                     )
-                )
 
-            timeline_status = gr.Markdown()
+                    with gr.Row(equal_height=False):
+                        with gr.Column(
+                            scale=3,
+                            min_width=520,
+                            elem_classes=["care-card", "chat-panel"],
+                        ):
+                            chatbot = gr.Chatbot(
+                                value=(
+                                    _welcome_chat_history()
+                                ),
+                                height=430,
+                                show_label=False,
+                                layout="bubble",
+                                placeholder="从一件小事开始记录吧。",
+                                elem_id="health-chat",
+                            )
 
-            timeline_table = gr.Dataframe(
-                headers=[
-                    "event_id",
-                    "occurred_at",
-                    "event_type",
-                    "detail",
-                    "input_source",
-                    "updated_at",
-                ],
-                datatype=[
-                    "str",
-                    "str",
-                    "str",
-                    "str",
-                    "str",
-                    "str",
-                ],
-                value=[],
-                interactive=False,
-                label="健康时间线",
-            )
+                            agent_activity = gr.Markdown(
+                                value="",
+                                visible=False,
+                                sanitize_html=False,
+                                container=False,
+                                elem_classes=(
+                                    "agent-activity-wrap"
+                                ),
+                            )
 
-            gr.Markdown(
-                "修改或删除时，可以把表格中的 "
-                "`event_id` 提供给 Agent。"
-            )
+                            selected_record_context = gr.Markdown(
+                                value="",
+                                visible=False,
+                                sanitize_html=False,
+                                container=False,
+                                elem_classes=(
+                                    "selected-record-context"
+                                ),
+                            )
 
-        with gr.Tab("饮食确认"):
-            gr.Markdown(
-                "## 人工饮食主链\n\n"
-                "图片只作为输入入口。"
-                "食物名称和份量由用户填写，"
-                "营养值来自 RAG 候选和确定性计算。"
-            )
+                            pending_agent_card = gr.Markdown(
+                                value="",
+                                visible=False,
+                                sanitize_html=False,
+                                container=False,
+                                elem_classes="inline-confirmation",
+                            )
 
-            meal_preview_state = gr.State(
-                value=None
-            )
+                            with gr.Row(
+                                elem_classes=(
+                                    "inline-confirmation-actions"
+                                )
+                            ):
+                                cancel_agent_button = gr.Button(
+                                    "取消",
+                                    variant="secondary",
+                                    size="md",
+                                    visible=False,
+                                    scale=0,
+                                    min_width=96,
+                                )
 
-            image_input = gr.File(
-                label="上传一张食物图片",
-                file_count="single",
-                file_types=[
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                ],
-                type="filepath",
-            )
+                                confirm_agent_button = gr.Button(
+                                    "确认并保存",
+                                    variant="primary",
+                                    size="md",
+                                    visible=False,
+                                    scale=0,
+                                    min_width=126,
+                                )
 
-            food_query = gr.Textbox(
-                label="手动填写食物名称",
-                placeholder="例如：西红柿",
-            )
+                            with gr.Row(elem_classes="composer-row"):
+                                chat_input = gr.Textbox(
+                                    show_label=False,
+                                    placeholder="例如：晚饭后散步了 30 分钟",
+                                    lines=1,
+                                    max_lines=4,
+                                    scale=8,
+                                    container=True,
+                                )
 
-            grams_input = gr.Number(
-                label="食物克重（g）",
-                minimum=0.01,
-                maximum=10000,
-            )
+                                send_button = gr.Button(
+                                    "发送  ↑",
+                                    variant="primary",
+                                    size="md",
+                                    scale=1,
+                                    min_width=96,
+                                )
 
-            search_button = gr.Button(
-                "查找候选",
-                variant="secondary",
-            )
+                        with gr.Column(
+                            scale=1,
+                            min_width=270,
+                            elem_classes=["care-card", "status-card"],
+                        ):
+                            gr.Markdown(
+                                """
+                                <div class="section-heading">本轮状态</div>
+                                <p class="section-copy">只展示可验证的产品状态，不展示模型内部思维链。</p>
+                                """,
+                                sanitize_html=False,
+                                container=False,
+                            )
 
-            candidate_status = gr.Markdown()
+                            agent_status = gr.Markdown(
+                                (
+                                    "对话服务已连接，可以开始记录。"
+                                    if agent_model is not None
+                                    else (
+                                        "对话服务尚未启用。"
+                                        "你仍可以使用今日概览、"
+                                        "时间线和饮食记录。"
+                                    )
+                                ),
+                                elem_classes="agent-status",
+                                container=False,
+                            )
 
-            candidate_table = gr.Dataframe(
-                headers=[
-                    "food_id",
-                    "name",
-                    "category",
-                    "stage",
-                    "match_type",
-                    "matched_term",
-                    "score",
-                    "source",
-                    "source_version",
-                    "candidate_source",
-                ],
-                datatype=[
-                    "str",
-                    "str",
-                    "str",
-                    "number",
-                    "str",
-                    "str",
-                    "number",
-                    "str",
-                    "str",
-                    "str",
-                ],
-                value=[],
-                interactive=False,
-                label="RAG 候选",
-            )
+                            gr.Markdown(
+                                """
+                                <div class="quick-guide-title">可以这样说</div>
+                                <div class="quick-guide">
+                                  <div class="guide-item"><i>水</i><div><b>记录饮水</b><span>“喝了 350 毫升水”</span></div></div>
+                                  <div class="guide-item"><i>动</i><div><b>记录运动</b><span>“慢跑 30 分钟”</span></div></div>
+                                  <div class="guide-item"><i>查</i><div><b>查询记录</b><span>“今天有哪些记录？”</span></div></div>
+                                </div>
+                                """,
+                                sanitize_html=False,
+                                container=False,
+                            )
 
-            selected_food = gr.Dropdown(
-                label="选择候选食物",
-                choices=[],
-                value=None,
-                interactive=True,
-            )
+                            with gr.Column(elem_classes="action-row"):
+                                reset_agent_button = gr.Button(
+                                    "重置本次会话",
+                                    variant="secondary",
+                                    size="sm",
+                                )
 
-            calculate_button = gr.Button(
-                "计算营养估算",
-                variant="primary",
-            )
+                            gr.Markdown(
+                                """
+                                <div class="memory-note">
+                                  <strong>本地记忆已开启</strong>
+                                  <span>刷新页面会恢复这段对话。点击“重置本次会话”会清除历史。</span>
+                                </div>
+                                <p>需要确认时，操作卡片会直接出现在对话下方。</p>
+                                """,
+                                sanitize_html=False,
+                                elem_classes="action-help",
+                                container=False,
+                            )
 
-            calculation_status = gr.Markdown()
-
-            meal_preview = gr.Markdown(
-                "尚未计算待确认记录。"
-            )
-
-            recompute_evidence = gr.Markdown(
-                "### 可重算证据\n\n"
-                "尚未选择数据行并计算。"
-            )
-
-            with gr.Row():
-                meal_save_button = (
-                    gr.Button(
-                        "确认保存饮食",
-                        variant="primary",
+            with gr.Tab(
+                "健康时间线",
+                id="timeline",
+            ):
+                with gr.Column(elem_classes="page-wrap"):
+                    gr.Markdown(
+                        """
+                        <div class="page-title">
+                          <h2>每一条，都有迹可循。</h2>
+                          <p>筛选已经确认的健康记录。需要修改或删除时，告诉小满记录时间和内容即可。</p>
+                        </div>
+                        """,
+                        sanitize_html=False,
+                        container=False,
                     )
-                )
 
-                meal_cancel_button = (
-                    gr.Button(
-                        "取消饮食草稿",
-                        variant="stop",
+                    with gr.Column(elem_classes="care-card"):
+                        with gr.Row(elem_classes="filter-row"):
+                            timeline_date = gr.Textbox(
+                                label="日期",
+                                info="YYYY-MM-DD",
+                                value=initial_date,
+                                scale=2,
+                            )
+
+                            timeline_event_type = gr.Dropdown(
+                                label="事件类型",
+                                choices=[
+                                    ("全部记录", ""),
+                                    ("饮食", "meal"),
+                                    ("饮水", "water"),
+                                    ("体重", "weight"),
+                                    ("运动", "exercise"),
+                                ],
+                                value="",
+                                scale=2,
+                            )
+
+                            refresh_timeline_button = gr.Button(
+                                "查询记录",
+                                variant="primary",
+                                size="md",
+                                scale=1,
+                            )
+
+                        timeline_status = gr.Markdown(
+                            container=False,
+                        )
+
+                        timeline_table = gr.Dataframe(
+                            headers=[
+                                "时间",
+                                "记录类型",
+                                "记录内容",
+                                "记录来源",
+                                "状态",
+                            ],
+                            datatype=[
+                                "str",
+                                "str",
+                                "str",
+                                "str",
+                                "str",
+                            ],
+                            value=[],
+                            interactive=False,
+                            show_label=False,
+                            max_height=520,
+                            wrap=True,
+                            elem_classes="timeline-table",
+                        )
+
+            with gr.Tab(
+                "目标与复盘",
+                id="goals",
+            ):
+                with gr.Column(elem_classes="page-wrap"):
+                    gr.Markdown(
+                        """
+                        <div class="page-title">
+                          <h2>让记录，慢慢靠近你的目标。</h2>
+                          <p>目标保留每一次调整，复盘只使用已确认的健康事实；没有足够数据时会明确说明。</p>
+                        </div>
+                        """,
+                        sanitize_html=False,
+                        container=False,
                     )
-                )
 
-            meal_save_status = gr.Markdown()
+                    with gr.Row(equal_height=False):
+                        with gr.Column(scale=2, min_width=420, elem_classes="care-card"):
+                            with gr.Row():
+                                gr.Markdown(
+                                    '<div><div class="section-heading">个人设置</div>'
+                                    '<p class="section-copy">只保存你明确确认的单位、偏好、时区和表达风格。</p></div>',
+                                    sanitize_html=False,
+                                    container=False,
+                                )
+                                edit_profile_button = gr.Button(
+                                    "调整设置", variant="secondary", size="sm", scale=0
+                                )
+                            profile_summary = gr.Markdown(
+                                "正在读取个人设置……",
+                                sanitize_html=False,
+                                container=False,
+                            )
 
-        with gr.Tab("开发者证据"):
-            gr.Markdown(
-                "## Agent 执行证据\n\n"
-                "工具参数值和确认令牌均已脱敏。"
-            )
+                        with gr.Column(scale=1, min_width=260, elem_classes=["care-card", "knowledge-note"]):
+                            gr.Markdown(
+                                """
+                                <div class="section-heading">可信知识边界</div>
+                                <p>一般生活建议只使用带来源的本地知识条目。目前收录 WHO 的运动与健康饮食资料。</p>
+                                <p>诊断、用药、急症或证据不足的问题会停止普通建议流程。</p>
+                                """,
+                                sanitize_html=False,
+                                container=False,
+                            )
+                            ask_knowledge_button = gr.Button(
+                                "向小满提问", variant="secondary", size="sm"
+                            )
 
-            latest_agent_steps = gr.JSON(
-                value=[],
-                label="脱敏 tool_steps",
-            )
+                    with gr.Column(elem_classes="care-card"):
+                        with gr.Row():
+                            gr.Markdown(
+                                '<div><div class="section-heading">健康目标</div>'
+                                '<p class="section-copy">调整、暂停或恢复会新增版本，不覆盖过去。</p></div>',
+                                sanitize_html=False,
+                                container=False,
+                            )
+                            create_goal_button = gr.Button(
+                                "创建目标", variant="primary", size="sm", scale=0
+                            )
+                            manage_goal_button = gr.Button(
+                                "调整目标", variant="secondary", size="sm", scale=0
+                            )
+                        goals_table = gr.Dataframe(
+                            headers=["目标", "目标值", "周期", "状态", "版本", "更新时间"],
+                            datatype=["str", "str", "str", "str", "str", "str"],
+                            value=[],
+                            interactive=False,
+                            show_label=False,
+                            max_height=320,
+                            wrap=True,
+                            elem_classes="goals-table",
+                        )
 
-            latest_agent_state = gr.JSON(
-                value={
-                    "state": "idle",
-                    "trace": {
-                        "enabled": True,
-                        "path": (
-                            "data/"
-                            "agent_traces.jsonl"
-                        ),
-                    },
-                },
-                label="Agent state",
-            )
+                    with gr.Column(elem_classes="care-card"):
+                        with gr.Row(elem_classes="filter-row"):
+                            gr.Markdown(
+                                '<div><div class="section-heading">周期复盘</div>'
+                                '<p class="section-copy">事实、完整度与一个可执行的下一步。</p></div>',
+                                sanitize_html=False,
+                                container=False,
+                            )
+                            period_days = gr.Dropdown(
+                                choices=[("最近 7 天", 7), ("最近 14 天", 14), ("最近 30 天", 30)],
+                                value=7,
+                                label="复盘周期",
+                                min_width=150,
+                                scale=0,
+                            )
+                            refresh_healthos_button = gr.Button(
+                                "刷新复盘", variant="secondary", size="sm", scale=0
+                            )
+                        checkin_summary = gr.Markdown(
+                            "正在整理已确认记录……",
+                            sanitize_html=False,
+                            container=False,
+                        )
+                        ask_review_button = gr.Button(
+                            "在对话中继续复盘", variant="secondary", size="sm"
+                        )
 
-            gr.Markdown(
-                "## 持久化 Agent Trace\n\n"
-                "每次发送、确认和取消都会写入 "
-                "`data/agent_traces.jsonl`。\n\n"
-                "文件中只保存状态、工具名称、"
-                "参数名称和错误码，不保存健康参数值、"
-                "原始对话或确认令牌。"
-            )
-
-            with gr.Row():
-                agent_trace_limit = gr.Number(
-                    label="读取条数",
-                    value=20,
-                    minimum=1,
-                    maximum=200,
-                    precision=0,
-                )
-
-                refresh_agent_trace_button = (
-                    gr.Button(
-                        "刷新 Agent Trace",
-                        variant="secondary",
+            with gr.Tab(
+                "提醒中心",
+                id="reminders",
+            ):
+                with gr.Column(elem_classes="page-wrap"):
+                    gr.Markdown(
+                        """
+                        <div class="page-title">
+                          <h2>提醒行动，也由你掌控。</h2>
+                          <p>小满先展示时间、时区和影响范围。确认后才安排，之后可以延后、暂停或取消。</p>
+                        </div>
+                        """,
+                        sanitize_html=False,
+                        container=False,
                     )
-                )
+                    with gr.Column(elem_classes="care-card"):
+                        with gr.Row():
+                            gr.Markdown(
+                                '<div><div class="section-heading">本地提醒</div>'
+                                '<p class="section-copy">当前为本地模拟 Provider，不会写入外部日历或系统通知。</p></div>',
+                                sanitize_html=False,
+                                container=False,
+                            )
+                            create_reminder_button = gr.Button(
+                                "创建提醒", variant="primary", size="sm", scale=0
+                            )
+                            manage_reminder_button = gr.Button(
+                                "管理提醒", variant="secondary", size="sm", scale=0
+                            )
+                        reminders_table = gr.Dataframe(
+                            headers=["提醒内容", "计划时间", "状态", "时区", "状态记录"],
+                            datatype=["str", "str", "str", "str", "number"],
+                            value=[],
+                            interactive=False,
+                            show_label=False,
+                            max_height=420,
+                            wrap=True,
+                            elem_classes="reminders-table",
+                        )
+                        reminder_status = gr.Markdown(container=False)
 
-            recent_agent_traces = gr.JSON(
-                value=refresh_agent_traces(),
-                label="最近 Agent Trace",
-            )
+                    gr.Markdown(
+                        """
+                        <section class="reminder-boundary">
+                          <strong>本地提醒的能力边界</strong>
+                          <p>页面运行时可以安排和回查提醒状态；关闭应用后不会像手机系统闹钟一样主动弹出通知。</p>
+                        </section>
+                        """,
+                        sanitize_html=False,
+                        container=False,
+                    )
 
-            gr.Markdown(
-                "## 最近一次饮食检索 Trace"
-            )
+            with gr.Tab(
+                "拍照记饮食",
+                id="meal",
+            ):
+                with gr.Column(elem_classes="page-wrap"):
+                    gr.Markdown(
+                        """
+                        <div class="page-title">
+                          <h2>一张照片，认真确认这一餐。</h2>
+                          <p>图片只作为记录入口。你确认食物与份量后，小满才从数据源检索并计算营养。</p>
+                        </div>
+                        """,
+                        sanitize_html=False,
+                        container=False,
+                    )
 
-            latest_retrieval_trace = gr.JSON(
-                value={},
-                label="RetrievalTrace",
-            )
+                    meal_preview_state = gr.State(value=None)
 
-        with gr.Tab("隐私与数据"):
-            gr.Markdown(
-                "## 隐私与数据\n\n"
-                "- 健康事件保存在本机 "
-                "`data/health_events.jsonl`。\n"
-                "- Agent Trace 保存在本机 "
-                "`data/agent_traces.jsonl`。\n"
-                "- Agent Trace 不保存原始对话和健康参数值。\n"
-                "- 原始图片不会复制到健康记录。\n"
-                "- `.env` 和 API Key 不进入 Git。\n"
-                "- 确认令牌不会展示在开发者证据中。\n"
-                "- Agent Session 只保存在当前进程内存中。\n"
-                "- 浏览器会话结束时清理短期 Session。\n"
-                "- 每日汇总只读取 committed events。\n"
-                "- 页面结果不构成医疗建议。\n"
-                "- 当前 JSONL 方案只适合本地单用户、"
-                "单进程学习项目。"
-            )
+                    with gr.Row(equal_height=False):
+                        with gr.Column(
+                            scale=1,
+                            min_width=330,
+                            elem_classes=["care-card", "meal-step"],
+                        ):
+                            gr.Markdown(
+                                """
+                                <div class="section-heading"><i class="meal-step-number">1</i>添加与描述</div>
+                                <p class="section-copy">上传 JPG 或 PNG，并手动填写你认为最接近的食物名称。</p>
+                                """,
+                                sanitize_html=False,
+                                container=False,
+                            )
+
+                            image_input = gr.File(
+                                label="餐食图片",
+                                file_count="single",
+                                file_types=[
+                                    ".jpg",
+                                    ".jpeg",
+                                    ".png",
+                                ],
+                                type="filepath",
+                                height=190,
+                                elem_classes="meal-dropzone",
+                            )
+
+                            food_query = gr.Textbox(
+                                label="食物名称",
+                                placeholder="例如：西红柿炒蛋",
+                            )
+
+                            grams_input = gr.Number(
+                                label="估计份量（g）",
+                                minimum=0.01,
+                                maximum=10000,
+                            )
+
+                            search_button = gr.Button(
+                                "查找可靠候选",
+                                variant="secondary",
+                            )
+
+                            candidate_status = gr.Markdown(
+                                container=False,
+                            )
+
+                            with gr.Accordion(
+                                "查看候选检索证据",
+                                open=False,
+                            ):
+                                candidate_table = gr.Dataframe(
+                                    headers=[
+                                        "food_id",
+                                        "name",
+                                        "category",
+                                        "stage",
+                                        "match_type",
+                                        "matched_term",
+                                        "score",
+                                        "source",
+                                        "source_version",
+                                        "candidate_source",
+                                    ],
+                                    datatype=[
+                                        "str",
+                                        "str",
+                                        "str",
+                                        "number",
+                                        "str",
+                                        "str",
+                                        "number",
+                                        "str",
+                                        "str",
+                                        "str",
+                                    ],
+                                    value=[],
+                                    interactive=False,
+                                    show_label=False,
+                                    max_height=250,
+                                    elem_classes="candidate-table",
+                                )
+
+                        with gr.Column(
+                            scale=1,
+                            min_width=330,
+                            elem_classes=["care-card", "meal-step"],
+                        ):
+                            gr.Markdown(
+                                """
+                                <div class="section-heading"><i class="meal-step-number">2</i>核对与保存</div>
+                                <p class="section-copy">候选不会被静默选中。请核对数据行，再生成待确认草稿。</p>
+                                """,
+                                sanitize_html=False,
+                                container=False,
+                            )
+
+                            selected_food = gr.Dropdown(
+                                label="确认食物候选",
+                                choices=[],
+                                value=None,
+                                interactive=True,
+                            )
+
+                            calculate_button = gr.Button(
+                                "生成营养估算",
+                                variant="primary",
+                            )
+
+                            calculation_status = gr.Markdown(
+                                container=False,
+                            )
+
+                            meal_preview = gr.Markdown(
+                                "尚未生成待确认记录。",
+                                elem_classes="meal-preview",
+                            )
+
+                            with gr.Accordion(
+                                "查看确定性计算公式",
+                                open=False,
+                            ):
+                                recompute_evidence = gr.Markdown(
+                                    "### 可重算证据\n\n"
+                                    "尚未选择数据行并计算。"
+                                )
+
+                            with gr.Row(elem_classes="action-row"):
+                                meal_save_button = gr.Button(
+                                    "确认保存",
+                                    variant="primary",
+                                )
+
+                                meal_cancel_button = gr.Button(
+                                    "取消草稿",
+                                    variant="stop",
+                                )
+
+                            meal_save_status = gr.Markdown(
+                                container=False,
+                            )
+
+            with gr.Tab(
+                "开发者证据",
+                id="developer",
+            ):
+                with gr.Column(elem_classes="page-wrap"):
+                    gr.Markdown(
+                        """
+                        <div class="page-title">
+                          <h2>透明，是产品的一部分。</h2>
+                          <p>供开发与验收使用。只展示脱敏状态、工具名称和错误码，不展示健康参数值或确认令牌。</p>
+                        </div>
+                        """,
+                        sanitize_html=False,
+                        container=False,
+                    )
+
+                    with gr.Accordion(
+                        "HealthOS · 15 个受控工具契约",
+                        open=False,
+                    ):
+                        gr.Markdown(
+                            "模型只能提出这些工具调用。所有参数先过 Schema；产生副作用的操作还要经过统一确认中间件。",
+                            container=False,
+                        )
+                        gr.Dataframe(
+                            headers=["工具", "性质", "关键边界"],
+                            datatype=["str", "str", "str"],
+                            value=_tool_contract_rows(),
+                            interactive=False,
+                            show_label=False,
+                            max_height=480,
+                            wrap=True,
+                            elem_classes="tool-contract-table",
+                        )
+
+                    with gr.Row(equal_height=False):
+                        with gr.Column(
+                            scale=1,
+                            elem_classes="care-card",
+                        ):
+                            latest_agent_steps = gr.JSON(
+                                value=[],
+                                label="最近一次 tool_steps",
+                            )
+
+                        with gr.Column(
+                            scale=1,
+                            elem_classes="care-card",
+                        ):
+                            latest_agent_state = gr.JSON(
+                                value={
+                                    "state": "idle",
+                                    "trace": {
+                                        "enabled": True,
+                                        "path": (
+                                            "data/"
+                                            "agent_traces.jsonl"
+                                        ),
+                                    },
+                                },
+                                label="当前 Agent state",
+                            )
+
+                    with gr.Column(elem_classes="care-card"):
+                        gr.Markdown(
+                            "#### 持久化 Agent Trace\n"
+                            "每次发送、确认和取消都会写入脱敏 Trace。"
+                        )
+
+                        with gr.Row(elem_classes="filter-row"):
+                            agent_trace_limit = gr.Number(
+                                label="读取条数",
+                                value=20,
+                                minimum=1,
+                                maximum=200,
+                                precision=0,
+                                scale=1,
+                            )
+
+                            refresh_agent_trace_button = gr.Button(
+                                "刷新 Trace",
+                                variant="secondary",
+                                size="md",
+                                scale=1,
+                            )
+
+                        recent_agent_traces = gr.JSON(
+                            value=refresh_agent_traces(),
+                            label="最近 Agent Trace",
+                        )
+
+                    with gr.Accordion(
+                        "最近一次饮食检索 Trace",
+                        open=False,
+                    ):
+                        latest_retrieval_trace = gr.JSON(
+                            value={},
+                            label="RetrievalTrace",
+                        )
+
+            with gr.Tab(
+                "隐私与数据",
+                id="privacy",
+            ):
+                with gr.Column(elem_classes="page-wrap"):
+                    gr.Markdown(
+                        """
+                        <div class="page-title">
+                          <h2>你的健康数据，只属于你。</h2>
+                          <p>小满把数据边界放在界面上，而不是藏在一段很长的服务条款里。</p>
+                        </div>
+                        """,
+                        sanitize_html=False,
+                        container=False,
+                    )
+
+                    gr.Markdown(
+                        """
+                        <section class="care-card privacy-grid">
+                          <article class="privacy-item"><i>本</i><div><b>健康记录，本地保存</b><span>确认后的事件写入本机 data/health_events.jsonl。</span></div></article>
+                          <article class="privacy-item"><i>迹</i><div><b>Trace 默认脱敏</b><span>不保存原始对话、健康参数值或确认令牌。</span></div></article>
+                          <article class="privacy-item"><i>图</i><div><b>餐食图片不复制</b><span>原始图片只作为当次输入，不复制进健康记录。</span></div></article>
+                          <article class="privacy-item"><i>会</i><div><b>对话历史，本地保存</b><span>刷新页面会恢复历史与上下文；重置本次会话后删除。</span></div></article>
+                          <article class="privacy-item"><i>确</i><div><b>写操作必须确认</b><span>保存、修改和删除都先生成草稿，再由你确认。</span></div></article>
+                          <article class="privacy-item"><i>界</i><div><b>能力边界清晰可见</b><span>不提供医疗诊断；当前存储适合本地单用户演示。</span></div></article>
+                        </section>
+                        """,
+                        sanitize_html=False,
+                        container=False,
+                    )
 
         refresh_today_button.click(
             fn=refresh_today,
@@ -2036,6 +3785,49 @@ def build_demo() -> gr.Blocks:
                 timeline_status,
             ],
         )
+
+        healthos_outputs = [
+            profile_summary,
+            goals_table,
+            checkin_summary,
+            reminders_table,
+            reminder_status,
+        ]
+
+        refresh_healthos_button.click(
+            fn=refresh_healthos_dashboard,
+            inputs=[period_days],
+            outputs=healthos_outputs,
+            show_progress="hidden",
+        )
+
+        period_days.change(
+            fn=refresh_healthos_dashboard,
+            inputs=[period_days],
+            outputs=healthos_outputs,
+            show_progress="hidden",
+        )
+
+        healthos_action_outputs = [
+            main_tabs,
+            chat_input,
+            selected_record_state,
+            selected_record_context,
+        ]
+        for action_button, action_function in (
+            (edit_profile_button, open_profile_settings),
+            (create_goal_button, open_goal_creation),
+            (manage_goal_button, open_goal_management),
+            (ask_review_button, open_period_review),
+            (ask_knowledge_button, open_knowledge_question),
+            (create_reminder_button, open_reminder_creation),
+            (manage_reminder_button, open_reminder_management),
+        ):
+            action_button.click(
+                fn=action_function,
+                outputs=healthos_action_outputs,
+                show_progress="hidden",
+            )
 
         search_button.click(
             fn=search_candidates,
@@ -2067,7 +3859,7 @@ def build_demo() -> gr.Blocks:
             ],
         )
 
-        meal_save_button.click(
+        meal_save_event = meal_save_button.click(
             fn=confirm_meal_save,
             inputs=[
                 meal_preview_state
@@ -2077,6 +3869,13 @@ def build_demo() -> gr.Blocks:
                 today_table,
                 today_summary,
             ],
+        )
+
+        meal_save_event.then(
+            fn=refresh_healthos_dashboard,
+            inputs=[period_days],
+            outputs=healthos_outputs,
+            show_progress="hidden",
         )
 
         meal_cancel_button.click(
@@ -2089,11 +3888,36 @@ def build_demo() -> gr.Blocks:
             ],
         )
 
-        send_button.click(
+        today_table.select(
+            fn=open_today_record_in_chat,
+            outputs=[
+                main_tabs,
+                chat_input,
+                selected_record_state,
+                selected_record_context,
+            ],
+            show_progress="hidden",
+        )
+
+        send_activity_event = send_button.click(
+            fn=begin_agent_activity,
+            inputs=[
+                chat_input,
+                selected_record_state,
+            ],
+            outputs=[
+                agent_activity
+            ],
+            queue=False,
+            show_progress="hidden",
+        )
+
+        send_result_event = send_activity_event.then(
             fn=send_chat_message,
             inputs=[
                 chat_input,
                 chatbot,
+                selected_record_state,
             ],
             outputs=[
                 chatbot,
@@ -2101,14 +3925,46 @@ def build_demo() -> gr.Blocks:
                 agent_status,
                 latest_agent_steps,
                 latest_agent_state,
+                pending_agent_card,
+                confirm_agent_button,
+                cancel_agent_button,
+                selected_record_state,
+                selected_record_context,
             ],
+            show_progress="hidden",
         )
 
-        chat_input.submit(
+        send_result_event.then(
+            fn=finish_agent_activity,
+            inputs=[
+                agent_status
+            ],
+            outputs=[
+                agent_activity
+            ],
+            queue=False,
+            show_progress="hidden",
+        )
+
+        submit_activity_event = chat_input.submit(
+            fn=begin_agent_activity,
+            inputs=[
+                chat_input,
+                selected_record_state,
+            ],
+            outputs=[
+                agent_activity
+            ],
+            queue=False,
+            show_progress="hidden",
+        )
+
+        submit_result_event = submit_activity_event.then(
             fn=send_chat_message,
             inputs=[
                 chat_input,
                 chatbot,
+                selected_record_state,
             ],
             outputs=[
                 chatbot,
@@ -2116,10 +3972,28 @@ def build_demo() -> gr.Blocks:
                 agent_status,
                 latest_agent_steps,
                 latest_agent_state,
+                pending_agent_card,
+                confirm_agent_button,
+                cancel_agent_button,
+                selected_record_state,
+                selected_record_context,
             ],
+            show_progress="hidden",
         )
 
-        confirm_agent_button.click(
+        submit_result_event.then(
+            fn=finish_agent_activity,
+            inputs=[
+                agent_status
+            ],
+            outputs=[
+                agent_activity
+            ],
+            queue=False,
+            show_progress="hidden",
+        )
+
+        confirm_agent_event = confirm_agent_button.click(
             fn=confirm_agent_action,
             inputs=[
                 chatbot
@@ -2131,7 +4005,18 @@ def build_demo() -> gr.Blocks:
                 latest_agent_state,
                 today_table,
                 today_summary,
+                pending_agent_card,
+                confirm_agent_button,
+                cancel_agent_button,
             ],
+            show_progress="hidden",
+        )
+
+        confirm_agent_event.then(
+            fn=refresh_healthos_dashboard,
+            inputs=[period_days],
+            outputs=healthos_outputs,
+            show_progress="hidden",
         )
 
         cancel_agent_button.click(
@@ -2144,7 +4029,11 @@ def build_demo() -> gr.Blocks:
                 agent_status,
                 latest_agent_steps,
                 latest_agent_state,
+                pending_agent_card,
+                confirm_agent_button,
+                cancel_agent_button,
             ],
+            show_progress="hidden",
         )
 
         reset_agent_button.click(
@@ -2154,6 +4043,11 @@ def build_demo() -> gr.Blocks:
                 agent_status,
                 latest_agent_steps,
                 latest_agent_state,
+                pending_agent_card,
+                confirm_agent_button,
+                cancel_agent_button,
+                selected_record_state,
+                selected_record_context,
             ],
         )
 
@@ -2176,10 +4070,33 @@ def build_demo() -> gr.Blocks:
         )
 
         demo.load(
+            fn=restore_agent_conversation,
+            inputs=[
+                browser_conversation_id
+            ],
+            outputs=[
+                browser_conversation_id,
+                chatbot,
+                agent_status,
+                pending_agent_card,
+                confirm_agent_button,
+                cancel_agent_button,
+            ],
+            show_progress="hidden",
+        )
+
+        demo.load(
             fn=refresh_agent_traces,
             outputs=[
                 recent_agent_traces
             ],
+        )
+
+        demo.load(
+            fn=refresh_healthos_dashboard,
+            inputs=[period_days],
+            outputs=healthos_outputs,
+            show_progress="hidden",
         )
 
         demo.unload(

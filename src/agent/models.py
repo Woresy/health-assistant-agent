@@ -186,6 +186,10 @@ class PendingConfirmation(
         "save",
         "update",
         "delete",
+        "profile_update",
+        "goal_change",
+        "reminder_create",
+        "reminder_change",
     ]
     tool_name: str
     draft_data: dict[str, Any]

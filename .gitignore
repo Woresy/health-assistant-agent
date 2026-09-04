@@ -38,6 +38,9 @@ data/traces.jsonl
 data/traces.jsonl.*
 data/agent_traces.jsonl
 data/agent_traces.jsonl.*
+data/conversations/
+data/healthos_state.json
+data/healthos_state.json.*
 
 # Local temporary files
 *.tmp

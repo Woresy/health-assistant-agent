@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import (
     Any,
     Literal,
@@ -14,6 +15,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -28,6 +30,8 @@ from src.health.models import (
 from src.storage.jsonl_store import (
     HealthEventStore,
 )
+from src.storage.healthos_store import HealthOSStore, HealthOSStoreError
+from src.nutrition.repository import FoodRepository
 from src.tools.delete_health_event import (
     delete_health_event,
 )
@@ -49,6 +53,23 @@ from src.tools.save_health_event import (
 )
 from src.tools.update_health_event import (
     update_health_event,
+)
+from src.tools.healthos import (
+    calculate_nutrition,
+    create_reminder_draft,
+    execute_healthos_confirmation,
+    execute_reminder,
+    get_health_events,
+    get_health_goals,
+    get_daily_summary,
+    get_period_summary,
+    get_user_profile,
+    list_or_cancel_reminders,
+    prepare_event_change,
+    prepare_goal_change,
+    prepare_profile_update,
+    retrieve_health_knowledge,
+    retrieve_nutrition_candidates,
 )
 
 
@@ -381,92 +402,183 @@ class PrepareDeleteArguments(
     event_id: str
 
 
-TOOL_DEFINITIONS: tuple[
-    dict[str, Any],
-    ...,
-] = (
-    {
+class EmptyArguments(ToolInputModel):
+    """无需模型参数的读取工具。"""
+
+
+class ProfilePatchArguments(ToolInputModel):
+    timezone_name: str | None = Field(default=None, min_length=1, max_length=100)
+    coach_style: Literal["gentle", "rational", "concise", "goal_focused"] | None = None
+    dietary_preferences: list[str] | None = Field(default=None, max_length=20)
+    exclusions: list[str] | None = Field(default=None, max_length=20)
+    reminders_enabled: bool | None = None
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
+
+    @field_validator("coach_style", mode="before")
+    @classmethod
+    def normalize_style_alias(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().casefold().replace("-", "_").replace(" ", "_")
+        return {
+            "encouraging": "gentle",
+            "warm": "gentle",
+            "supportive": "gentle",
+            "温和": "gentle",
+            "温暖": "gentle",
+            "鼓励": "gentle",
+            "温和陪伴": "gentle",
+            "analytical": "rational",
+            "logical": "rational",
+            "理性": "rational",
+            "理性复盘": "rational",
+            "brief": "concise",
+            "simple": "concise",
+            "简洁": "concise",
+            "简洁提醒": "concise",
+            "accountability": "goal_focused",
+            "strict": "goal_focused",
+            "目标督促": "goal_focused",
+        }.get(normalized, normalized)
+
+    @model_validator(mode="after")
+    def require_at_least_one_change(self) -> "ProfilePatchArguments":
+        if not self.model_fields_set:
+            raise ValueError("请至少提供一项要修改的设置")
+        return self
+
+
+class ProfileUpdateArguments(ToolInputModel):
+    patch: ProfilePatchArguments
+
+
+class GoalChangeArguments(ToolInputModel):
+    operation: Literal["create", "update", "pause", "resume"]
+    goal_id: str | None = None
+    title: str | None = None
+    goal_type: Literal["water", "exercise", "weight", "nutrition", "custom"] | None = None
+    target_value: float | None = Field(default=None, gt=0, le=1_000_000)
+    unit: str | None = Field(default=None, min_length=1, max_length=30)
+    period: Literal["daily", "weekly", "monthly", "8_weeks"] | None = None
+    reason: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class PrepareEventChangeArguments(ToolInputModel):
+    operation: Literal["update", "delete"]
+    event_id: str
+    patch: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_flat_payload_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("operation") != "update":
+            return data
+        normalized = PrepareUpdateArguments.normalize_flat_payload_fields(
+            {"event_id": data.get("event_id"), "patch": data.get("patch")}
+        )
+        return {**data, "patch": normalized.get("patch")}
+
+
+class NutritionCandidatesArguments(ToolInputModel):
+    query: str = Field(min_length=1, max_length=64)
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
+class NutritionCalculationArguments(ToolInputModel):
+    food_code: str = Field(min_length=1, max_length=128)
+    grams: float = Field(gt=0, le=10000)
+    retrieval_query: str = Field(min_length=1, max_length=128)
+
+
+class HealthKnowledgeArguments(ToolInputModel):
+    question: str = Field(min_length=1, max_length=500)
+    top_k: int = Field(default=3, ge=1, le=5)
+
+
+class PeriodSummaryArguments(ToolInputModel):
+    days: Literal[7, 14, 30] = 7
+    end_date: str | None = None
+    timezone_name: str | None = None
+
+
+class ReminderDraftArguments(ToolInputModel):
+    content: str = Field(min_length=1, max_length=300)
+    scheduled_for: str
+    timezone_name: str | None = None
+
+
+class ExecuteReminderArguments(ToolInputModel):
+    draft: dict[str, Any]
+    confirmation_token: str = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class ReminderListOrChangeArguments(ToolInputModel):
+    action: Literal["list", "cancel", "snooze", "pause", "resume"] = "list"
+    reminder_id: str | None = None
+    scheduled_for: str | None = None
+    reason: str | None = Field(default=None, max_length=500)
+
+
+def _definition(name: str, description: str, model: type[BaseModel]) -> dict[str, Any]:
+    return {
         "type": "function",
         "function": {
-            "name": (
-                "prepare_health_event"
-            ),
-            "description": (
-                "生成饮食、饮水、体重或"
-                "运动事件保存草稿。"
-                "只生成草稿，不执行保存。"
-            ),
-            "parameters": (
-                PrepareHealthEventArguments
-                .model_json_schema()
-            ),
+            "name": name,
+            "description": description,
+            "parameters": model.model_json_schema(),
         },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": (
-                "query_health_events"
-            ),
-            "description": (
-                "查询用户已经保存的"
-                "健康事件时间线。"
-            ),
-            "parameters": (
-                QueryEventsArguments
-                .model_json_schema()
-            ),
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": (
-                "get_daily_health_summary"
-            ),
-            "description": (
-                "读取已保存事件并生成"
-                "指定日期的确定性汇总。"
-            ),
-            "parameters": (
-                DailySummaryArguments
-                .model_json_schema()
-            ),
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": (
-                "prepare_update_health_event"
-            ),
-            "description": (
-                "生成事件更新前后对比。"
-                "只生成草稿，不执行更新。"
-            ),
-            "parameters": (
-                PrepareUpdateArguments
-                .model_json_schema()
-            ),
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": (
-                "prepare_delete_health_event"
-            ),
-            "description": (
-                "展示待删除事件并生成草稿。"
-                "只生成草稿，不执行删除。"
-            ),
-            "parameters": (
-                PrepareDeleteArguments
-                .model_json_schema()
-            ),
-        },
-    },
+    }
+
+
+TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    _definition("get_user_profile", "读取最小必要用户档案、单位、时区和教练风格。", EmptyArguments),
+    _definition(
+        "prepare_profile_update",
+        "生成档案或提醒偏好变更草稿；确认前不写入。教练风格：gentle=温和陪伴、rational=理性复盘、concise=简洁提醒、goal_focused=目标督促。",
+        ProfileUpdateArguments,
+    ),
+    _definition("get_health_goals", "读取健康目标当前状态和完整版本历史。", EmptyArguments),
+    _definition("prepare_goal_change", "创建、调整、暂停或恢复目标草稿；不覆盖旧版本。", GoalChangeArguments),
+    _definition("get_health_events", "查询已经确认保存的饮食、饮水、体重和运动事实。", QueryEventsArguments),
+    _definition("prepare_health_event", "生成健康记录保存草稿；缺参时追问，确认前不保存。", PrepareHealthEventArguments),
+    _definition("prepare_event_change", "生成已有记录的修改前后对比或删除草稿。", PrepareEventChangeArguments),
+    _definition("retrieve_nutrition_candidates", "检索 Top-K 标准食物候选并返回来源和分数。", NutritionCandidatesArguments),
+    _definition("calculate_nutrition", "只使用选中食物数据行和克重确定性计算营养。", NutritionCalculationArguments),
+    _definition("retrieve_health_knowledge", "检索带引用的一般健康知识；医疗或紧急问题拒答。", HealthKnowledgeArguments),
+    _definition("get_daily_summary", "从已保存事实汇总指定日期并展示数据完整度。", DailySummaryArguments),
+    _definition("get_period_summary", "汇总 7、14 或 30 天趋势事实；不推断原因。", PeriodSummaryArguments),
+    _definition("create_reminder_draft", "生成本地提醒草稿并展示时间、时区和影响范围。", ReminderDraftArguments),
+    _definition("execute_reminder", "仅凭有效确认令牌和幂等键执行提醒草稿。", ExecuteReminderArguments),
+    _definition("list_or_cancel_reminders", "查看提醒；取消、延后、暂停或恢复时生成待确认草稿。", ReminderListOrChangeArguments),
 )
+
+TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
+    "get_user_profile": {"risk_level": "read", "timeout_seconds": 5, "confirmation": False},
+    "prepare_profile_update": {"risk_level": "draft", "timeout_seconds": 5, "confirmation": True},
+    "get_health_goals": {"risk_level": "read", "timeout_seconds": 5, "confirmation": False},
+    "prepare_goal_change": {"risk_level": "draft", "timeout_seconds": 5, "confirmation": True},
+    "get_health_events": {"risk_level": "read", "timeout_seconds": 5, "confirmation": False},
+    "prepare_health_event": {"risk_level": "draft", "timeout_seconds": 5, "confirmation": True},
+    "prepare_event_change": {"risk_level": "draft", "timeout_seconds": 5, "confirmation": True},
+    "retrieve_nutrition_candidates": {"risk_level": "retrieval", "timeout_seconds": 15, "confirmation": False},
+    "calculate_nutrition": {"risk_level": "calculation", "timeout_seconds": 5, "confirmation": False},
+    "retrieve_health_knowledge": {"risk_level": "retrieval", "timeout_seconds": 5, "confirmation": False},
+    "get_daily_summary": {"risk_level": "read", "timeout_seconds": 5, "confirmation": False},
+    "get_period_summary": {"risk_level": "read", "timeout_seconds": 5, "confirmation": False},
+    "create_reminder_draft": {"risk_level": "draft", "timeout_seconds": 5, "confirmation": True},
+    "execute_reminder": {"risk_level": "write", "timeout_seconds": 5, "confirmation": True},
+    "list_or_cancel_reminders": {"risk_level": "read_or_draft", "timeout_seconds": 5, "confirmation": "write_only"},
+}
+
+
+_TOOL_ALIASES = {
+    "query_health_events": "get_health_events",
+    "get_daily_health_summary": "get_daily_summary",
+    "prepare_update_health_event": "prepare_event_change",
+    "prepare_delete_health_event": "prepare_event_change",
+}
 
 
 _FOLLOW_UP_QUESTIONS = {
@@ -505,6 +617,11 @@ _FOLLOW_UP_QUESTIONS = {
         "你想修改这条记录的"
         "哪些内容？"
     ),
+    "goal_id": "请先选择要调整的健康目标。",
+    "profile_patch": "你想修改哪项档案或提醒偏好？",
+    "goal_fields": "请补充目标名称、数值、单位和周期。",
+    "reminder_content": "你希望我提醒什么？",
+    "scheduled_for": "请告诉我提醒的具体日期和时间。",
 }
 
 
@@ -564,7 +681,9 @@ def _find_missing_parameters(
 ) -> tuple[str, ...]:
     """按照工具和事件类型确定必填参数。"""
 
-    if tool_name == (
+    canonical_name = _TOOL_ALIASES.get(tool_name, tool_name)
+
+    if canonical_name == (
         "prepare_health_event"
     ):
         if _is_missing(
@@ -616,8 +735,8 @@ def _find_missing_parameters(
             )
         )
 
-    if tool_name == (
-        "get_daily_health_summary"
+    if canonical_name == (
+        "get_daily_summary"
     ):
         return (
             ("date",)
@@ -654,6 +773,33 @@ def _find_missing_parameters(
             )
             else ()
         )
+
+    if canonical_name == "prepare_profile_update" and _is_missing(arguments, "patch"):
+        return ("profile_patch",)
+
+    if canonical_name == "prepare_goal_change":
+        operation = str(arguments.get("operation", "")).strip().lower()
+        if operation == "create" and any(
+            _is_missing(arguments, field)
+            for field in ("title", "goal_type", "target_value", "unit", "period")
+        ):
+            return ("goal_fields",)
+        if operation in {"update", "pause", "resume"} and _is_missing(arguments, "goal_id"):
+            return ("goal_id",)
+
+    if canonical_name == "prepare_event_change":
+        if _is_missing(arguments, "event_id"):
+            return ("event_id",)
+        if arguments.get("operation") == "update" and _is_missing(arguments, "patch"):
+            return ("patch",)
+
+    if canonical_name == "create_reminder_draft":
+        missing = []
+        if _is_missing(arguments, "content"):
+            missing.append("reminder_content")
+        if _is_missing(arguments, "scheduled_for"):
+            missing.append("scheduled_for")
+        return tuple(missing)
 
     return ()
 
@@ -704,15 +850,19 @@ class HealthToolRouter:
     def __init__(
         self,
         store: HealthEventStore,
+        *,
+        healthos_store: HealthOSStore | None = None,
+        nutrition_repository: FoodRepository | None = None,
     ) -> None:
         self._store = store
-        self._available_tools = (
-            "prepare_health_event",
-            "query_health_events",
-            "get_daily_health_summary",
-            "prepare_update_health_event",
-            "prepare_delete_health_event",
+        self._healthos_store = healthos_store or HealthOSStore(
+            Path(__file__).resolve().parents[2] / "data" / "healthos_state.json"
         )
+        self._nutrition_repository = nutrition_repository or FoodRepository()
+        self._available_tools = tuple(
+            item["function"]["name"] for item in TOOL_DEFINITIONS
+        )
+        self._accepted_tools = (*self._available_tools, *_TOOL_ALIASES)
 
     @property
     def available_tools(
@@ -733,6 +883,40 @@ class HealthToolRouter:
 
         return TOOL_DEFINITIONS
 
+    @property
+    def tool_contracts(self) -> dict[str, dict[str, Any]]:
+        """返回风险、超时预算与确认策略，供验收和 UI 展示。"""
+
+        return {name: dict(contract) for name, contract in TOOL_CONTRACTS.items()}
+
+    def minimal_user_context(self, *, user_id: str, timezone_name: str) -> str:
+        """只组装当前任务可用的最小档案与活动目标。"""
+
+        try:
+            profile = self._healthos_store.get_profile(user_id, timezone_name)
+            goals = [
+                goal.current
+                for goal in self._healthos_store.read().goals
+                if goal.user_id == user_id and goal.current.status.value == "active"
+            ]
+        except (HealthOSStoreError, ValueError):
+            return ""
+        goal_lines = [
+            f"- {goal.title}：{goal.target_value:g} {goal.unit} / {goal.period}"
+            for goal in goals[:5]
+        ]
+        return (
+            "\n\n当前已确认的最小用户上下文：\n"
+            f"- 时区：{profile.timezone_name}\n"
+            f"- 单位：{profile.unit_system}\n"
+            f"- 教练风格：{profile.coach_style.value}\n"
+            f"- 饮食偏好：{'、'.join(profile.dietary_preferences) or '未设置'}\n"
+            f"- 忌口：{'、'.join(profile.exclusions) or '未设置'}\n"
+            "- 活动目标：\n"
+            + ("\n".join(goal_lines) if goal_lines else "  暂无")
+            + "\n只在当前请求相关时使用这些信息，不得推断未确认属性。"
+        )
+
     def dispatch(
         self,
         *,
@@ -747,7 +931,7 @@ class HealthToolRouter:
 
         if (
             tool_name
-            not in self._available_tools
+            not in self._accepted_tools
         ):
             return ToolDispatchResult(
                 status="invalid",
@@ -760,10 +944,17 @@ class HealthToolRouter:
                 ),
             )
 
+        canonical_name = _TOOL_ALIASES.get(tool_name, tool_name)
+        canonical_arguments = dict(arguments)
+        if tool_name == "prepare_update_health_event":
+            canonical_arguments = {**canonical_arguments, "operation": "update"}
+        elif tool_name == "prepare_delete_health_event":
+            canonical_arguments = {**canonical_arguments, "operation": "delete"}
+
         missing_parameters = (
             _find_missing_parameters(
                 tool_name,
-                arguments,
+                canonical_arguments,
             )
         )
 
@@ -783,11 +974,11 @@ class HealthToolRouter:
             )
 
         try:
-            if tool_name == (
+            if canonical_name == (
                 "prepare_health_event"
             ):
                 validation_arguments = dict(
-                    arguments
+                    canonical_arguments
                 )
 
                 if (
@@ -882,18 +1073,49 @@ class HealthToolRouter:
                     )
                 )
 
-            elif tool_name == (
-                "query_health_events"
+            elif canonical_name == "get_user_profile":
+                EmptyArguments.model_validate(canonical_arguments)
+                result = get_user_profile(
+                    user_id=user_id,
+                    timezone_name=timezone_name,
+                    store=self._healthos_store,
+                )
+
+            elif canonical_name == "prepare_profile_update":
+                validated = ProfileUpdateArguments.model_validate(canonical_arguments)
+                result = prepare_profile_update(
+                    user_id=user_id,
+                    timezone_name=timezone_name,
+                    patch=validated.patch.model_dump(mode="json", exclude_unset=True),
+                    idempotency_key=_idempotency_key(session_id=session_id, call_id=call_id),
+                    store=self._healthos_store,
+                )
+
+            elif canonical_name == "get_health_goals":
+                EmptyArguments.model_validate(canonical_arguments)
+                result = get_health_goals(user_id=user_id, store=self._healthos_store)
+
+            elif canonical_name == "prepare_goal_change":
+                validated = GoalChangeArguments.model_validate(canonical_arguments)
+                result = prepare_goal_change(
+                    user_id=user_id,
+                    idempotency_key=_idempotency_key(session_id=session_id, call_id=call_id),
+                    store=self._healthos_store,
+                    **validated.model_dump(mode="json", exclude_none=True),
+                )
+
+            elif canonical_name == (
+                "get_health_events"
             ):
                 validated = (
                     QueryEventsArguments
                     .model_validate(
-                        arguments
+                        canonical_arguments
                     )
                 )
 
                 result = (
-                    query_health_events(
+                    get_health_events(
                         user_id=user_id,
                         event_type=(
                             validated
@@ -921,18 +1143,18 @@ class HealthToolRouter:
                     )
                 )
 
-            elif tool_name == (
-                "get_daily_health_summary"
+            elif canonical_name == (
+                "get_daily_summary"
             ):
                 validated = (
                     DailySummaryArguments
                     .model_validate(
-                        arguments
+                        canonical_arguments
                     )
                 )
 
                 result = (
-                    get_daily_health_summary(
+                    get_daily_summary(
                         user_id=user_id,
                         date=validated.date,
                         timezone_name=(
@@ -941,72 +1163,112 @@ class HealthToolRouter:
                             or timezone_name
                         ),
                         store=self._store,
+                        healthos_store=self._healthos_store,
                     )
                 )
 
-            elif tool_name == (
-                "prepare_update_health_event"
-            ):
-                validated = (
-                    PrepareUpdateArguments
-                    .model_validate(
-                        arguments
-                    )
+            elif canonical_name == "prepare_event_change":
+                validated = PrepareEventChangeArguments.model_validate(canonical_arguments)
+                result = prepare_event_change(
+                    operation=validated.operation,
+                    event_id=validated.event_id,
+                    user_id=user_id,
+                    patch=validated.patch,
+                    idempotency_key=_idempotency_key(session_id=session_id, call_id=call_id),
+                    store=self._store,
                 )
 
-                result = (
-                    prepare_update_health_event(
-                        event_id=(
-                            validated.event_id
-                        ),
-                        user_id=user_id,
-                        patch=validated.patch,
-                        idempotency_key=(
-                            _idempotency_key(
-                                session_id=(
-                                    session_id
-                                ),
-                                call_id=call_id,
-                            )
-                        ),
-                        store=self._store,
-                    )
+            elif canonical_name == "retrieve_nutrition_candidates":
+                validated = NutritionCandidatesArguments.model_validate(canonical_arguments)
+                result = retrieve_nutrition_candidates(
+                    query=validated.query,
+                    top_k=validated.top_k,
+                    repository=self._nutrition_repository,
+                )
+
+            elif canonical_name == "calculate_nutrition":
+                validated = NutritionCalculationArguments.model_validate(canonical_arguments)
+                result = calculate_nutrition(
+                    food_code=validated.food_code,
+                    grams=validated.grams,
+                    retrieval_query=validated.retrieval_query,
+                    repository=self._nutrition_repository,
+                )
+
+            elif canonical_name == "retrieve_health_knowledge":
+                validated = HealthKnowledgeArguments.model_validate(canonical_arguments)
+                result = retrieve_health_knowledge(
+                    question=validated.question,
+                    top_k=validated.top_k,
+                )
+
+            elif canonical_name == "get_period_summary":
+                validated = PeriodSummaryArguments.model_validate(canonical_arguments)
+                result = get_period_summary(
+                    user_id=user_id,
+                    days=validated.days,
+                    end_date=validated.end_date,
+                    timezone_name=validated.timezone_name or timezone_name,
+                    store=self._store,
+                    healthos_store=self._healthos_store,
+                )
+
+            elif canonical_name == "create_reminder_draft":
+                validated = ReminderDraftArguments.model_validate(canonical_arguments)
+                result = create_reminder_draft(
+                    user_id=user_id,
+                    content=validated.content,
+                    scheduled_for=validated.scheduled_for,
+                    timezone_name=validated.timezone_name or timezone_name,
+                    idempotency_key=_idempotency_key(session_id=session_id, call_id=call_id),
+                    store=self._healthos_store,
+                )
+
+            elif canonical_name == "execute_reminder":
+                validated = ExecuteReminderArguments.model_validate(canonical_arguments)
+                result = execute_reminder(
+                    user_id=user_id,
+                    draft=validated.draft,
+                    confirmation_token=validated.confirmation_token,
+                    idempotency_key=validated.idempotency_key,
+                    store=self._healthos_store,
                 )
 
             else:
-                validated = (
-                    PrepareDeleteArguments
-                    .model_validate(
-                        arguments
-                    )
-                )
-
-                result = (
-                    prepare_delete_health_event(
-                        event_id=(
-                            validated.event_id
-                        ),
-                        user_id=user_id,
-                        idempotency_key=(
-                            _idempotency_key(
-                                session_id=(
-                                    session_id
-                                ),
-                                call_id=call_id,
-                            )
-                        ),
-                        store=self._store,
-                    )
+                validated = ReminderListOrChangeArguments.model_validate(canonical_arguments)
+                result = list_or_cancel_reminders(
+                    user_id=user_id,
+                    idempotency_key=_idempotency_key(session_id=session_id, call_id=call_id),
+                    store=self._healthos_store,
+                    **validated.model_dump(mode="json", exclude_none=True),
                 )
 
         except ValidationError as exc:
+            if canonical_name == "prepare_profile_update":
+                validation_message = (
+                    "这项个人设置无法识别。教练风格可以选择："
+                    "温和陪伴、理性复盘、简洁提醒或目标督促；"
+                    "免打扰时间请使用 HH:MM。"
+                )
+            else:
+                validation_message = f"工具参数校验失败：{exc}"
             return ToolDispatchResult(
                 status="invalid",
                 tool_name=tool_name,
                 arguments=arguments,
                 result=_tool_error(
                     "VALIDATION_ERROR",
-                    f"工具参数校验失败：{exc}",
+                    validation_message,
+                ),
+            )
+        except Exception as exc:
+            return ToolDispatchResult(
+                status="invalid",
+                tool_name=tool_name,
+                arguments=arguments,
+                result=_tool_error(
+                    "TOOL_EXECUTION_ERROR",
+                    f"工具执行失败：{type(exc).__name__}",
                 ),
             )
 
@@ -1090,6 +1352,17 @@ class HealthToolRouter:
                     ]
                 ),
                 store=self._store,
+            )
+
+        if pending.action in {
+            "profile_update",
+            "goal_change",
+            "reminder_create",
+            "reminder_change",
+        }:
+            return execute_healthos_confirmation(
+                draft_data=data,
+                store=self._healthos_store,
             )
 
         return _tool_error(

@@ -282,6 +282,69 @@ def _same_text(
     )
 
 
+def action_payload_digest(payload: dict[str, Any]) -> str:
+    """为档案、目标和提醒草稿计算稳定摘要。"""
+
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def issue_action_confirmation_token(
+    *,
+    action: str,
+    user_id: str,
+    payload: dict[str, Any],
+    idempotency_key: str,
+    ttl_seconds: int = 900,
+) -> str:
+    """为通用 P1 写操作签发与草稿内容绑定的令牌。"""
+
+    normalized_action = action.strip()
+    normalized_user_id = user_id.strip()
+    normalized_key = _validate_idempotency_key(idempotency_key)
+    if not normalized_action or not normalized_user_id:
+        raise ValueError("action 和 user_id 不能为空")
+    return _issue_signed_token(
+        operation_body={
+            "action": normalized_action,
+            "user_id": normalized_user_id,
+            "idempotency_key": normalized_key,
+            "payload_digest": action_payload_digest(payload),
+        },
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def verify_action_confirmation_token(
+    *,
+    token: str,
+    action: str,
+    user_id: str,
+    payload: dict[str, Any],
+    idempotency_key: str,
+) -> tuple[bool, str]:
+    """验证通用 P1 写操作令牌与执行参数完全一致。"""
+
+    valid, message, body = _decode_and_verify_token(token)
+    if not valid or body is None:
+        return False, message
+    expected = {
+        "action": action,
+        "user_id": user_id,
+        "idempotency_key": idempotency_key,
+        "payload_digest": action_payload_digest(payload),
+    }
+    for field_name, expected_value in expected.items():
+        if not _same_text(body.get(field_name), expected_value):
+            return False, f"确认令牌与本次{field_name}不匹配"
+    return True, ""
+
+
 def _validate_idempotency_key(
     idempotency_key: str,
 ) -> str:
