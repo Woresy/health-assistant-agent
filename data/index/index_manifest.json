@@ -1,9 +1,9 @@
 {
   "schema_version": "1.0",
-  "index_id": "sha256:31e5572a46d19fca491d6ea67b71546c79bb1fd484d1363a06d45d130f953a13",
-  "created_at": "2026-08-28T15:51:54.065595+00:00",
+  "index_id": "sha256:7cc17bcd6aeff2f766187bca25f946e9bdcf903b8af4ff5566eaf0a24e764614",
+  "created_at": "2026-09-05T00:44:55.334943+00:00",
   "model_name": "BAAI/bge-small-zh-v1.5",
-  "model_revision": null,
+  "model_revision": "7999e1d3359715c523056ef9478215996d62a620",
   "query_instruction": "为这个句子生成表示以用于检索相关文章：",
   "dataset_id": "foods_sample:sha256:8adef74a5dc8",
   "dataset_sha256": "8adef74a5dc802a6c8968b7b6263ea5b40e882ebbce7a03e3772724730d0b2c7",

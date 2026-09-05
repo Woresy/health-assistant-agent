@@ -892,6 +892,35 @@ class HealthToolRouter:
     def minimal_user_context(self, *, user_id: str, timezone_name: str) -> str:
         """只组装当前任务可用的最小档案与活动目标。"""
 
+        context = self.minimal_user_context_data(
+            user_id=user_id,
+            timezone_name=timezone_name,
+        )
+        if not context:
+            return ""
+        profile = context["profile"]
+        goals = context["goals"]
+        goal_lines = [
+            f"- {goal['title']}：{goal['target_value']:g} {goal['unit']} / {goal['period']}"
+            for goal in goals[:5]
+        ]
+        return (
+            "\n\n当前已确认的最小用户上下文：\n"
+            f"- 时区：{profile['timezone_name']}\n"
+            f"- 单位：{profile['unit_system']}\n"
+            f"- 教练风格：{profile['coach_style']}\n"
+            f"- 饮食偏好：{'、'.join(profile['dietary_preferences']) or '未设置'}\n"
+            f"- 忌口：{'、'.join(profile['exclusions']) or '未设置'}\n"
+            "- 活动目标：\n"
+            + ("\n".join(goal_lines) if goal_lines else "  暂无")
+            + "\n只在当前请求相关时使用这些信息，不得推断未确认属性。"
+        )
+
+    def minimal_user_context_data(
+        self, *, user_id: str, timezone_name: str
+    ) -> dict[str, Any]:
+        """返回 Prompt Pipeline 使用的结构化最小上下文。"""
+
         try:
             profile = self._healthos_store.get_profile(user_id, timezone_name)
             goals = [
@@ -900,22 +929,25 @@ class HealthToolRouter:
                 if goal.user_id == user_id and goal.current.status.value == "active"
             ]
         except (HealthOSStoreError, ValueError):
-            return ""
-        goal_lines = [
-            f"- {goal.title}：{goal.target_value:g} {goal.unit} / {goal.period}"
-            for goal in goals[:5]
-        ]
-        return (
-            "\n\n当前已确认的最小用户上下文：\n"
-            f"- 时区：{profile.timezone_name}\n"
-            f"- 单位：{profile.unit_system}\n"
-            f"- 教练风格：{profile.coach_style.value}\n"
-            f"- 饮食偏好：{'、'.join(profile.dietary_preferences) or '未设置'}\n"
-            f"- 忌口：{'、'.join(profile.exclusions) or '未设置'}\n"
-            "- 活动目标：\n"
-            + ("\n".join(goal_lines) if goal_lines else "  暂无")
-            + "\n只在当前请求相关时使用这些信息，不得推断未确认属性。"
-        )
+            return {}
+        return {
+            "profile": {
+                "timezone_name": profile.timezone_name,
+                "unit_system": profile.unit_system,
+                "coach_style": profile.coach_style.value,
+                "dietary_preferences": list(profile.dietary_preferences),
+                "exclusions": list(profile.exclusions),
+            },
+            "goals": [
+                {
+                    "title": goal.title,
+                    "target_value": goal.target_value,
+                    "unit": goal.unit,
+                    "period": goal.period,
+                }
+                for goal in goals[:5]
+            ],
+        }
 
     def dispatch(
         self,

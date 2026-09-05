@@ -32,6 +32,9 @@ from src.nutrition.retrieval_document import (  # noqa: E402
 DEFAULT_MODEL_NAME = (
     "BAAI/bge-small-zh-v1.5"
 )
+DEFAULT_MODEL_REVISION = (
+    "7999e1d3359715c523056ef9478215996d62a620"
+)
 DEFAULT_QUERY_INSTRUCTION = (
     "为这个句子生成表示以用于检索相关文章："
 )
@@ -345,7 +348,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--model-revision",
-        default=None,
+        default=DEFAULT_MODEL_REVISION,
     )
     parser.add_argument(
         "--query-instruction",

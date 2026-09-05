@@ -2,11 +2,20 @@
 
 ## 公开示例档
 
+新环境的完整 RAG 验收使用：
+
+```bash
+./scripts/reproduce_rag.sh
+```
+
+该入口会下载固定 revision 的 embedding 模型、重建索引，并同时运行 Lexical 与
+Hybrid 评测。以下 `run_eval.py` 命令仅用于单独调试一种模式。
+
 `tests/eval/nutrition_retrieval.jsonl` 固定包含 20 条查询，覆盖标准名、别名、
 口语名、复合菜、相似食物、错别字和明确拒答。所有非空
 `expected_food_codes` 都是 28 条公开示例中真实存在的 `FOOD_0xx`。
 
-从仓库根运行：
+只运行默认 Lexical 评测：
 
 ```bash
 python scripts/run_eval.py

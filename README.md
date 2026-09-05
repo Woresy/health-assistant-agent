@@ -2,7 +2,7 @@
 
 一个面向 AI 应用工程学习和求职作品集的个人健康管理助手。
 
-项目通过 Gradio 提供对话、饮食确认、健康事件管理和开发者证据页面，结合 OpenAI-compatible LLM、Hybrid RAG、确定性营养计算、工具调用、确认状态机和 JSONL 存储，实现可运行、可解释、可评测、可拒答、可追溯的健康记录流程。
+项目通过本地 Gradio 网页提供对话、饮食确认、健康事件管理和开发者证据页面，结合 OpenAI-compatible LLM、Hybrid RAG、确定性营养计算、工具调用、确认状态机、SQLite 业务存储和 JSONL 脱敏 Trace，实现可运行、可解释、可评测、可拒答、可追溯的健康记录流程。
 
 > 项目需求参考：[个人健康管理助理 Agent PRD](https://ruiyuan-ai-career-map.vercel.app/food-health-assistant-prd.html)
 
@@ -54,6 +54,8 @@
 | P1 健康知识 | 已完成 | WHO 来源、引用展示、医疗边界和注入拒答 |
 | P1 本地提醒 | 已完成 | 草稿、确认、幂等、查看、延后、暂停、恢复和取消 |
 | HealthOS 15 个工具 | 已完成 | 严格 Schema、白名单、Trace 与统一确认中间件 |
+| SQLite 分层存储 | 已完成 | 档案、目标、健康事实、会话与提醒分表持久化，旧数据可迁移回滚 |
+| 五层 Prompt Pipeline | 已完成 | 系统、输入、档案、目标/待办、可信 Tool Result 统一组装 |
 
 ## 8.28 完成结果
 
@@ -149,6 +151,37 @@ HealthEvent
 手动图片饮食、候选选择和确定性营养计算目前仍是独立 UI 流程，尚未迁移为
 LangGraph 子图。
 
+## 产品与界面设计决策
+
+### 目标用户
+
+第一版只服务一种核心用户：希望改善饮水、饮食、体重或运动习惯，但不愿维护复杂表单的学生与年轻职场人。设计目标是让一次日常记录尽量在 30 秒内完成，同时让用户清楚知道哪些内容已保存、哪些仍是草稿。
+
+### 为什么采用健康工作台
+
+页面不再把 PRD 功能平铺成一组同等级入口，而是建立 HealthOS 的日常任务顺序：
+
+```text
+今天判断状态
+→ 记录或补充事实
+→ 确认写入
+→ 从时间线和目标理解变化
+→ 用提醒安排下一步
+```
+
+桌面端使用常驻左侧系统导航，移动端折叠为横向入口。“今天”是默认工作区，优先显示当前最值得关注的目标差距、唯一主记录行动和最近记录；运行证据与数据控制保留在系统区，不与高频记录任务争夺注意力。
+
+### 健康记录场景的取舍
+
+- 选择自然语言作为主入口，降低记录负担；结构化字段仍由工具校验。
+- 选择先确认再写入，牺牲一步操作速度，换取健康事实可控和可纠正。
+- 选择展示可验证的执行阶段，不展示模型内部思维链，避免把不可靠推理当成事实。
+- 选择今日判断优先于完整数据总览，让用户先知道下一步，再决定是否深入时间线。
+- 选择固定浅色工作面，避免浏览器深色偏好造成组件局部变黑；当前版本不提供主题切换。
+- 选择本地单用户持久化，优先验证连续对话、目标和提醒闭环；多用户与跨设备同步留到后续架构升级。
+
+更完整的产品边界见 [`PRODUCT.md`](PRODUCT.md)，界面系统见 [`DESIGN.md`](DESIGN.md)。
+
 ## 核心设计原则
 
 ### 1. RAG 只负责找食物
@@ -239,7 +272,7 @@ flowchart TD
     CF --> UH[update health event]
     CF --> DH[delete health event]
 
-    SH --> STORE[HealthEvent JSONL Store]
+    SH --> STORE[SQLite Business Store]
     UH --> STORE
     DH --> STORE
     QH --> STORE
@@ -317,25 +350,12 @@ cancelled
 
 ### 模型可见工具
 
-模型只能调用静态白名单中的工具：
+模型只能调用 `HealthToolRouter` 静态白名单中的 15 个受控工具。每个 Tool 的
+用途、输入输出、写入边界、确认策略、失败恢复，以及 Tool/MCP 数量增长后的上下文
+治理方案见 [`docs/TOOLS.md`](docs/TOOLS.md)。
 
-```text
-prepare_health_event
-query_health_events
-get_daily_health_summary
-prepare_update_health_event
-prepare_delete_health_event
-```
-
-模型不能直接调用真正的写操作。
-
-用户确认后，程序才会执行：
-
-```text
-save_health_event
-update_health_event
-delete_health_event
-```
+模型负责读取、计算或生成写操作草稿；真正的健康事件、档案、目标和提醒变更必须
+经过统一确认中间件。确认令牌、用户身份、存储对象和服务端幂等键不由模型决定。
 
 ## Hybrid RAG
 
@@ -477,13 +497,16 @@ health-assistant-agent/
 │   ├── EVALUATION.md
 │   ├── LANGGRAPH_ACCEPTANCE.md
 │   ├── RAG.md
+│   ├── TOOLS.md
 │   ├── eval_hybrid.json
 │   ├── eval_lexical.json
 │   └── scope.md
 ├── scripts/
 │   ├── prepare_food_data.py
 │   ├── build_food_index.py
-│   └── run_eval.py
+│   ├── run_eval.py
+│   ├── reproduce_rag.py
+│   └── reproduce_rag.sh
 ├── src/
 │   ├── agent/
 │   │   ├── langgraph_runner.py
@@ -666,20 +689,34 @@ AGENT_MODEL=deepseek-v4-flash
 
 ## 配置 Hybrid RAG
 
-仓库中已有示例索引时，可以直接设置：
+### 新环境一条命令复现
+
+在仓库根目录运行：
+
+```bash
+./scripts/reproduce_rag.sh
+```
+
+首次运行会创建 `.venv`、安装固定依赖、下载固定 revision 的
+`BAAI/bge-small-zh-v1.5`、重建 `data/index`，随后依次运行 Lexical 与 Hybrid
+固定评测。任一步失败都会返回非零退出码；成功汇总写入
+`artifacts/rag-reproduction/reproduction_summary.json`。
+
+模型和依赖已经缓存在本地时，可执行：
+
+```bash
+RAG_SKIP_INSTALL=1 ./scripts/reproduce_rag.sh --offline
+```
+
+完整输入、输出、固定版本和故障恢复说明见 [`docs/RAG.md`](docs/RAG.md)。
+
+### 运行应用
+
+完成一键复现后设置：
 
 ```dotenv
 RAG_MODE=hybrid
 FOOD_INDEX_DIR=data/index
-```
-
-如果需要重新构建索引：
-
-```bash
-python scripts/build_food_index.py \
-  --data data/samples/foods_sample.json \
-  --hints data/retrieval_hints.json \
-  --index-dir data/index
 ```
 
 然后启动：
@@ -688,13 +725,8 @@ python scripts/build_food_index.py \
 RAG_MODE=hybrid python app.py
 ```
 
-第一次加载 Dense 模型可能需要下载：
-
-```text
-BAAI/bge-small-zh-v1.5
-```
-
-模型缓存后可以继续在本地使用。
+应用运行阶段只读取本地模型缓存，不会临时联网下载权重。如果模型缓存缺失，会返回
+`EMBEDDING_MODEL_UNAVAILABLE`；重新执行 `./scripts/reproduce_rag.sh` 即可恢复。
 
 ## 页面说明
 
@@ -1019,6 +1051,9 @@ python -m pytest -q tests/e2e
 
 ## 运行 RAG 离线评测
 
+完整验收优先执行 `./scripts/reproduce_rag.sh`。下面命令只用于分别调试某一种检索
+模式，不负责下载模型或重建索引。
+
 ### Lexical
 
 ```bash
@@ -1152,10 +1187,10 @@ python scripts/prepare_food_data.py \
 
 ## 数据存储与隐私
 
-确认后的健康事件保存在：
+确认后的健康事件、档案、目标、提醒和会话保存在：
 
 ```text
-data/health_events.jsonl
+data/healthos.db
 ```
 
 检索 Trace 保存在：
@@ -1164,7 +1199,17 @@ data/health_events.jsonl
 data/traces.jsonl
 ```
 
-当前 Agent Session 保存在进程内存中，浏览器会话结束时清理。
+Agent 会话快照也保存在本地 SQLite；LangGraph 的运行中 checkpoint 仍位于内存，
+页面刷新和进程重启后会从会话快照恢复可见历史。
+
+旧 JSON/JSONL 数据迁移与验证：
+
+```bash
+.venv/bin/python scripts/migrate_storage.py
+.venv/bin/python scripts/migrate_storage.py --verify-only
+```
+
+回滚到旧存储时设置 `STORAGE_BACKEND=json`。迁移器不会删除旧文件。
 
 以下内容不得提交到 GitHub：
 
@@ -1351,8 +1396,8 @@ Trace 仅保留会话和用户哈希、输入长度和哈希、状态、模型�
 - Dense 模型首次使用可能需要网络下载；
 - Agent 效果受到所配置 Provider 的 Tool Calling 能力影响；
 - Provider 未调用必需工具时，Agent Runner 会在有限轮次内重试，仍失败则拒绝写入；
-- Agent Session 尚未持久化；
-- JSONL 存储只适用于本地单进程；
+- LangGraph 运行中 checkpoint 尚未使用持久化 checkpointer；
+- SQLite 当前仍定位为本地单用户，不处理跨设备同步；
 - 没有用户登录和权限隔离；
 - 没有云端数据库；
 - 没有医疗审核能力；

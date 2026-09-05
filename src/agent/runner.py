@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
+from src.agent.context_pipeline import build_prompt_context
 from src.agent.models import (
     AgentFinishReason,
     AgentMessage,
@@ -53,6 +54,8 @@ SYSTEM_PROMPT = """
    get_health_events 查找候选；多条相似记录时用自然语言请用户进一步说明。
 18. 面向用户的回答不得展示 UUID、内部 ID、原始 JSON、确认令牌或内部字段名。
 19. 教练风格只改变表达，不得改变事实、数值、来源、安全规则或确认要求。
+20. “我今天吃了什么”“今天喝了多少”“今天记录了什么”等问句属于查询，调用
+   get_health_events 或 get_daily_summary，不得误建为新增草稿。
 """.strip()
 
 
@@ -366,6 +369,8 @@ def format_health_event_summary(
             payload.get("beverage")
             or "饮用水"
         )
+        if beverage.strip().casefold() in {"water", "plain water"}:
+            beverage = "饮用水"
         amount = payload.get("amount_ml")
         summary = beverage
         if amount is not None:
@@ -678,16 +683,6 @@ class AgentRunner:
             )
 
         messages = list(session_state.messages)
-        current_context = self._router.minimal_user_context(
-            user_id=session_state.user_id,
-            timezone_name=session_state.timezone_name,
-        )
-        if messages and messages[0].role == "system":
-            messages[0] = AgentMessage(
-                role="system",
-                content=SYSTEM_PROMPT + current_context,
-            )
-
         messages.append(
             AgentMessage(
                 role="user",
@@ -708,6 +703,22 @@ class AgentRunner:
             self._max_model_rounds
             + 1,
         ):
+            current_context = self._router.minimal_user_context_data(
+                user_id=session_state.user_id,
+                timezone_name=session_state.timezone_name,
+            )
+            if messages and messages[0].role == "system":
+                prompt_context = build_prompt_context(
+                    system_rules=SYSTEM_PROMPT,
+                    user_input=normalized_text,
+                    profile_context=current_context,
+                    pending_task=pending_task,
+                    messages=messages,
+                )
+                messages[0] = AgentMessage(
+                    role="system",
+                    content=prompt_context.render_system_message(),
+                )
             reply = self._model.complete(
                 messages,
                 self._router

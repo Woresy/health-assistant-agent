@@ -77,3 +77,16 @@ def test_update_preview_compares_before_and_after() -> None:
     assert "饮用水 500 ml" in answer
     assert "amount_ml" not in answer
 
+
+def test_english_water_value_is_localized_for_confirmation() -> None:
+    """模型返回英文饮品值时，确认卡仍应使用用户可读中文。"""
+
+    summary = format_health_event_summary(
+        {
+            "event_type": "water",
+            "amount_ml": 600,
+            "beverage": "water",
+        }
+    )
+
+    assert summary == "饮用水 600 ml"

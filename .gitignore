@@ -15,6 +15,10 @@ ENV/
 .coverage.*
 htmlcov/
 coverage.xml
+artifacts/rag-reproduction/
+
+# Optional repository-local Hugging Face cache
+.cache/huggingface/
 
 # Type-checker and lint caches
 .mypy_cache/
@@ -41,6 +45,9 @@ data/agent_traces.jsonl.*
 data/conversations/
 data/healthos_state.json
 data/healthos_state.json.*
+data/healthos.db
+data/healthos.db-shm
+data/healthos.db-wal
 
 # Local temporary files
 *.tmp

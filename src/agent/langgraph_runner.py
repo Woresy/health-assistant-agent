@@ -17,6 +17,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from typing_extensions import TypedDict
 
+from src.agent.context_pipeline import build_prompt_context
 from src.agent.models import (
     AgentFinishReason,
     AgentMessage,
@@ -295,14 +296,26 @@ class LangGraphAgentRunner:
             )
 
         messages = _messages_from_state(state)
-        current_context = self._router.minimal_user_context(
+        current_context = self._router.minimal_user_context_data(
             user_id=state["user_id"],
             timezone_name=state["timezone_name"],
         )
         if messages and messages[0].role == "system":
+            pending = state.get("pending_task")
+            prompt_context = build_prompt_context(
+                system_rules=SYSTEM_PROMPT,
+                user_input=state.get("user_text", ""),
+                profile_context=current_context,
+                pending_task=(
+                    PendingTask.model_validate(pending)
+                    if isinstance(pending, dict)
+                    else None
+                ),
+                messages=messages,
+            )
             messages[0] = AgentMessage(
                 role="system",
-                content=SYSTEM_PROMPT + current_context,
+                content=prompt_context.render_system_message(),
             )
         reply = self._model.complete(
             messages,
