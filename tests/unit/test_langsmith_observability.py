@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from src.observability.langsmith import configure_langsmith, wrap_openai_client
 
 
@@ -12,6 +14,7 @@ def _clear(monkeypatch) -> None:  # type: ignore[no-untyped-def]
         "LANGSMITH_PROJECT",
         "LANGSMITH_HIDE_INPUTS",
         "LANGSMITH_HIDE_OUTPUTS",
+        "LANGSMITH_ENDPOINT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -47,3 +50,18 @@ def test_health_privacy_defaults_hide_inputs_and_outputs(monkeypatch) -> None:  
     assert status.ready is True
     assert status.project == "health-assistant-agent-local"
     assert status.message.endswith("输入输出已隐藏")
+
+
+def test_legacy_cloud_endpoint_suffix_is_normalized(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _clear(monkeypatch)
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "test-key")
+    monkeypatch.setenv(
+        "LANGSMITH_ENDPOINT",
+        "https://api.smith.langchain.com/v1",
+    )
+
+    status = configure_langsmith()
+
+    assert status.ready is True
+    assert os.environ["LANGSMITH_ENDPOINT"] == "https://api.smith.langchain.com"

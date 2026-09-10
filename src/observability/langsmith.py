@@ -15,6 +15,20 @@ def _enabled(value: str | None) -> bool:
     return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def _normalize_cloud_endpoint() -> None:
+    """兼容曾经写入示例配置的 LangSmith Cloud ``/v1`` 后缀。"""
+
+    endpoint = os.getenv("LANGSMITH_ENDPOINT", "").strip().rstrip("/")
+    cloud_endpoints = {
+        "https://api.smith.langchain.com",
+        "https://eu.api.smith.langchain.com",
+        "https://apac.api.smith.langchain.com",
+        "https://aws.api.smith.langchain.com",
+    }
+    if endpoint.endswith("/v1") and endpoint[:-3] in cloud_endpoints:
+        os.environ["LANGSMITH_ENDPOINT"] = endpoint[:-3]
+
+
 @dataclass(frozen=True)
 class LangSmithStatus:
     enabled: bool
@@ -50,6 +64,7 @@ def configure_langsmith() -> LangSmithStatus:
             message="LangSmith 缺少 API Key，已安全降级为本地 Trace",
         )
 
+    _normalize_cloud_endpoint()
     os.environ.setdefault("LANGSMITH_PROJECT", project)
     os.environ.setdefault("LANGSMITH_HIDE_INPUTS", "true")
     os.environ.setdefault("LANGSMITH_HIDE_OUTPUTS", "true")

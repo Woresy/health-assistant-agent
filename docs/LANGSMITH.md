@@ -19,11 +19,14 @@ LangSmith 不是业务数据库，也不参与健康事实写入、用户确认�
 LANGSMITH_TRACING=true
 LANGSMITH_API_KEY=<你的 LangSmith API Key>
 LANGSMITH_PROJECT=health-assistant-agent-local
-LANGSMITH_ENDPOINT=https://api.smith.langchain.com/v1
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
 LANGSMITH_HIDE_INPUTS=true
 LANGSMITH_HIDE_OUTPUTS=true
 LANGSMITH_WORKSPACE_ID=
 ```
+
+LangSmith Cloud 的 `LANGSMITH_ENDPOINT` 不要追加 `/v1`。美国区通常可以直接删除
+该变量并使用 SDK 默认值；EU、APAC 或 AWS 区域则按 LangSmith 控制台提供的区域地址填写。
 
 不要提交 `.env`。健康项目默认隐藏输入和输出，因此 LangSmith 能看到流程结构、
 节点耗时、错误和模型元数据，但看不到用户的饮食、体重、提醒文本或模型回答。

@@ -51,7 +51,9 @@ SYSTEM_PROMPT = """
 12. 缺少必填参数时应提出工具调用，由工具校验生成追问。
 13. occurred_at 是可选参数；用户未说明时间时省略它，由程序使用当前时间。
 14. 汇总只读取已保存事件，不得补数据或推断变化原因。
-15. 饮食营养值必须来自候选检索和 calculate_nutrition 的确定性计算。
+15. 饮食营养值必须来自候选检索和 calculate_nutrition 的确定性计算。记录饮食时，
+   依次调用 retrieve_nutrition_candidates、calculate_nutrition 和
+   prepare_health_event；营养来源由工具结果提供，不得向用户索取 source_refs 等内部字段。
 16. 只有工具真正返回草稿后，才能告诉用户等待确认。
 17. 用户可以用时间、类型和内容指代记录。修改或删除缺少 event_id 时，先调用
    get_health_events 查找候选；多条相似记录时用自然语言请用户进一步说明。

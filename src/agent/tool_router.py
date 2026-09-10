@@ -26,6 +26,7 @@ from src.health.models import (
     EventType,
     ExerciseIntensity,
     InputSource,
+    MealPayload,
 )
 from src.storage.jsonl_store import (
     HealthEventStore,
@@ -114,10 +115,13 @@ class PrepareHealthEventArguments(
     event_type: EventType
     occurred_at: str | None = None
 
-    meal_payload: (
-        dict[str, Any]
-        | None
-    ) = None
+    meal_payload: MealPayload | None = Field(
+        default=None,
+        description=(
+            "饮食记录的标准结构，只能使用候选检索与营养计算工具返回的"
+            "食物、份量和营养结果；不要创建 items 等自定义结构。"
+        ),
+    )
     source_refs: (
         list[str]
         | None
@@ -549,7 +553,13 @@ TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     _definition("get_health_goals", "读取健康目标当前状态和完整版本历史。", EmptyArguments),
     _definition("prepare_goal_change", "创建、调整、暂停或恢复目标草稿；不覆盖旧版本。", GoalChangeArguments),
     _definition("get_health_events", "查询已经确认保存的饮食、饮水、体重和运动事实。", QueryEventsArguments),
-    _definition("prepare_health_event", "生成健康记录保存草稿；缺参时追问，确认前不保存。", PrepareHealthEventArguments),
+    _definition(
+        "prepare_health_event",
+        "生成健康记录保存草稿；缺参时追问，确认前不保存。饮食记录必须先用 "
+        "retrieve_nutrition_candidates 匹配食物，再用 calculate_nutrition 按份量计算；"
+        "不要要求用户提供内部营养来源字段。",
+        PrepareHealthEventArguments,
+    ),
     _definition("prepare_event_change", "生成已有记录的修改前后对比或删除草稿。", PrepareEventChangeArguments),
     _definition("retrieve_nutrition_candidates", "检索 Top-K 标准食物候选并返回来源和分数。", NutritionCandidatesArguments),
     _definition("calculate_nutrition", "只使用选中食物数据行和克重确定性计算营养。", NutritionCalculationArguments),
@@ -898,7 +908,16 @@ class HealthToolRouter:
     ) -> tuple[dict[str, Any], ...]:
         """按当前意图返回最小 Tool 集，降低模型延迟与上下文占用。"""
 
-        if pending_tool_name:
+        if pending_tool_name == "prepare_health_event":
+            # 饮食草稿的缺参补充可能需要先完成候选检索和确定性计算。
+            # 如果这里只暴露 prepare_health_event，模型会被锁死在“缺少来源”
+            # 的追问循环中，无法调用两个前置营养工具。
+            selected_names = {
+                "prepare_health_event",
+                "retrieve_nutrition_candidates",
+                "calculate_nutrition",
+            }
+        elif pending_tool_name:
             selected_names = {pending_tool_name}
         else:
             normalized = user_text.strip().casefold()
@@ -1033,6 +1052,29 @@ class HealthToolRouter:
             canonical_arguments = {**canonical_arguments, "operation": "update"}
         elif tool_name == "prepare_delete_health_event":
             canonical_arguments = {**canonical_arguments, "operation": "delete"}
+
+        if canonical_name == "prepare_health_event":
+            event_type = canonical_arguments.get("event_type")
+            if event_type in {EventType.MEAL, EventType.MEAL.value}:
+                # MealNutrition 已保存可审计的 source_ref。顶层 source_refs 是事件
+                # 的检索索引，能从同一份已计算结果安全派生，不应让用户理解或填写。
+                if _is_missing(canonical_arguments, "source_refs"):
+                    meal_payload = canonical_arguments.get("meal_payload")
+                    nutrition = (
+                        meal_payload.get("nutrition")
+                        if isinstance(meal_payload, dict)
+                        else None
+                    )
+                    source_ref = (
+                        nutrition.get("source_ref")
+                        if isinstance(nutrition, dict)
+                        else None
+                    )
+                    if isinstance(source_ref, str) and source_ref.strip():
+                        canonical_arguments["source_refs"] = [source_ref.strip()]
+
+                # 通过对话生成的饮食记录默认来自 chat；图片入口会显式传 image。
+                canonical_arguments.setdefault("input_source", InputSource.CHAT.value)
 
         missing_parameters = (
             _find_missing_parameters(
@@ -1337,8 +1379,21 @@ class HealthToolRouter:
                     "温和陪伴、理性复盘、简洁提醒或目标督促；"
                     "免打扰时间请使用 HH:MM。"
                 )
+            elif (
+                canonical_name == "prepare_health_event"
+                and canonical_arguments.get("event_type")
+                in {EventType.MEAL, EventType.MEAL.value}
+            ):
+                validation_message = (
+                    "这条饮食记录还没有整理成可保存的格式，本次没有写入。"
+                    "请用“食物名称 + 大致份量”重新发送，例如“番茄炒蛋 200g”；"
+                    "我会重新匹配营养数据并生成确认草稿。"
+                )
             else:
-                validation_message = f"工具参数校验失败：{exc}"
+                validation_message = (
+                    "这条健康信息的格式还不完整，本次没有写入。"
+                    "请检查数值和单位后重新发送。"
+                )
             return ToolDispatchResult(
                 status="invalid",
                 tool_name=tool_name,

@@ -190,6 +190,111 @@ def test_reminder_intent_only_exposes_reminder_tools(router: HealthToolRouter) -
     }
 
 
+def test_pending_meal_draft_keeps_nutrition_tools_available(
+    router: HealthToolRouter,
+) -> None:
+    definitions = router.tool_definitions_for(
+        "番茄炒蛋 200g",
+        pending_tool_name="prepare_health_event",
+    )
+
+    assert {
+        item["function"]["name"]
+        for item in definitions
+    } == {
+        "prepare_health_event",
+        "retrieve_nutrition_candidates",
+        "calculate_nutrition",
+    }
+
+
+def test_meal_tool_schema_exposes_required_nested_structure(
+    router: HealthToolRouter,
+) -> None:
+    definition = next(
+        item
+        for item in router.tool_definitions
+        if item["function"]["name"] == "prepare_health_event"
+    )
+    meal_schema = definition["function"]["parameters"]["properties"][
+        "meal_payload"
+    ]
+
+    assert any(
+        option.get("$ref", "").endswith("/$defs/MealPayload")
+        for option in meal_schema["anyOf"]
+    )
+
+
+def test_meal_source_refs_are_derived_from_calculated_nutrition(
+    router: HealthToolRouter,
+) -> None:
+    result = dispatch(
+        router,
+        "prepare_health_event",
+        {
+            "event_type": "meal",
+            "meal_payload": {
+                "food": {
+                    "food_id": "FOOD_019",
+                    "name": "番茄炒蛋",
+                    "category": "复合菜",
+                },
+                "portion": {"grams": 200, "unit": "g"},
+                "nutrition": {
+                    "calories_kcal": 188,
+                    "protein_g": 10.4,
+                    "fat_g": 11.6,
+                    "carbs_g": 11.8,
+                    "source_ref": "sample:FOOD_019",
+                    "retrieval_query": "番茄炒蛋",
+                    "selected_food_code": "FOOD_019",
+                    "portion_assumption": "可食部分 200g",
+                    "estimated": True,
+                },
+                "retrieval_query": "番茄炒蛋",
+                "candidate_source": "manual",
+                "estimated": True,
+            },
+        },
+    )
+
+    assert result.status == "executed"
+    assert result.result["data"]["event"]["source_refs"] == [
+        "sample:FOOD_019"
+    ]
+    assert result.result["data"]["event"]["input_source"] == "chat"
+
+
+def test_invalid_meal_shape_returns_actionable_user_message(
+    router: HealthToolRouter,
+) -> None:
+    result = dispatch(
+        router,
+        "prepare_health_event",
+        {
+            "event_type": "meal",
+            "meal_payload": {
+                "items": [
+                    {
+                        "name": "番茄炒蛋",
+                        "grams": 200,
+                        "calories_kcal": 188,
+                    }
+                ]
+            },
+            "source_refs": ["sample:FOOD_019"],
+        },
+    )
+
+    assert result.status == "invalid"
+    message = result.result["error"]["message"]
+    assert "本次没有写入" in message
+    assert "番茄炒蛋 200g" in message
+    assert "validation" not in message.casefold()
+    assert "meal_payload" not in message
+
+
 def test_feishu_reminder_draft_discloses_destination_before_confirmation(
     router: HealthToolRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
