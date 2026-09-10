@@ -75,6 +75,16 @@ def _write_json(
     )
 
 
+def portable_path(path: Path) -> str:
+    """报告只记录仓库相对路径或文件名，避免泄漏开发机目录。"""
+
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return resolved.name
+
+
 def download_embedding_model(
     *,
     model_name: str,
@@ -251,12 +261,10 @@ def reproduce_rag(
         "model": {
             "name": model_name,
             "revision": model_revision,
-            "snapshot_path": str(
-                snapshot_path
-            ),
+            "cache_verified": snapshot_path.exists(),
         },
         "index": {
-            "directory": str(index_dir),
+            "directory": portable_path(index_dir),
             "index_id": manifest["index_id"],
             "dataset_id": manifest["dataset_id"],
             "document_count": manifest[
@@ -265,7 +273,7 @@ def reproduce_rag(
         },
         "evaluations": {
             mode: {
-                "report": str(
+                "report": portable_path(
                     report_dir
                     / f"eval_{mode}.json"
                 ),

@@ -506,6 +506,13 @@ class ReminderDraftArguments(ToolInputModel):
     content: str = Field(min_length=1, max_length=300)
     scheduled_for: str
     timezone_name: str | None = None
+    delivery_channel: Literal["local", "feishu"] = "local"
+    reminder_type: Literal["standard", "check_in"] = "standard"
+    recurrence: Literal["once", "daily", "weekdays"] = "once"
+    check_in_focus: list[Literal["meal", "water", "exercise", "weight"]] = Field(
+        default_factory=list,
+        max_length=4,
+    )
 
 
 class ExecuteReminderArguments(ToolInputModel):
@@ -549,7 +556,7 @@ TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     _definition("retrieve_health_knowledge", "检索带引用的一般健康知识；医疗或紧急问题拒答。", HealthKnowledgeArguments),
     _definition("get_daily_summary", "从已保存事实汇总指定日期并展示数据完整度。", DailySummaryArguments),
     _definition("get_period_summary", "汇总 7、14 或 30 天趋势事实；不推断原因。", PeriodSummaryArguments),
-    _definition("create_reminder_draft", "生成本地提醒草稿并展示时间、时区和影响范围。", ReminderDraftArguments),
+    _definition("create_reminder_draft", "生成普通提醒或主动 check-in 草稿，展示发送渠道、目的地、内容、时间、频率和影响范围。", ReminderDraftArguments),
     _definition("execute_reminder", "仅凭有效确认令牌和幂等键执行提醒草稿。", ExecuteReminderArguments),
     _definition("list_or_cancel_reminders", "查看提醒；取消、延后、暂停或恢复时生成待确认草稿。", ReminderListOrChangeArguments),
 )
@@ -882,6 +889,50 @@ class HealthToolRouter:
         """返回 Provider 可使用的工具 Schema。"""
 
         return TOOL_DEFINITIONS
+
+    def tool_definitions_for(
+        self,
+        user_text: str,
+        *,
+        pending_tool_name: str | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        """按当前意图返回最小 Tool 集，降低模型延迟与上下文占用。"""
+
+        if pending_tool_name:
+            selected_names = {pending_tool_name}
+        else:
+            normalized = user_text.strip().casefold()
+            is_reminder_intent = (
+                "提醒我" in normalized
+                or "飞书提醒" in normalized
+                or "check-in" in normalized
+                or "主动问我" in normalized
+                or any(
+                    phrase in normalized
+                    for phrase in (
+                        "查看提醒",
+                        "查询提醒",
+                        "取消提醒",
+                        "延后提醒",
+                        "暂停提醒",
+                        "恢复提醒",
+                    )
+                )
+            )
+            if is_reminder_intent:
+                selected_names = {
+                    "create_reminder_draft",
+                    "list_or_cancel_reminders",
+                }
+            else:
+                return TOOL_DEFINITIONS
+
+        selected = tuple(
+            definition
+            for definition in TOOL_DEFINITIONS
+            if definition["function"]["name"] in selected_names
+        )
+        return selected or TOOL_DEFINITIONS
 
     @property
     def tool_contracts(self) -> dict[str, dict[str, Any]]:
@@ -1252,6 +1303,10 @@ class HealthToolRouter:
                     content=validated.content,
                     scheduled_for=validated.scheduled_for,
                     timezone_name=validated.timezone_name or timezone_name,
+                    delivery_channel=validated.delivery_channel,
+                    reminder_type=validated.reminder_type,
+                    recurrence=validated.recurrence,
+                    check_in_focus=validated.check_in_focus,
                     idempotency_key=_idempotency_key(session_id=session_id, call_id=call_id),
                     store=self._healthos_store,
                 )

@@ -37,6 +37,15 @@ class ReminderStatus(str, Enum):
     PAUSED = "paused"
     CANCELLED = "cancelled"
     FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
+class MemoryType(str, Enum):
+    DIETARY_PREFERENCE = "dietary_preference"
+    EXCLUSION = "exclusion"
+    COACH_STYLE = "coach_style"
+    REMINDER_PREFERENCE = "reminder_preference"
+    USER_NOTE = "user_note"
 
 
 class UserProfile(HealthOSModel):
@@ -177,6 +186,30 @@ class HealthGoal(HealthOSModel):
         return self.versions[-1]
 
 
+class UserMemory(HealthOSModel):
+    """只保存用户明确确认、可逐条遗忘的长期偏好。"""
+
+    memory_id: UUID
+    user_id: str = Field(min_length=1, max_length=128)
+    memory_type: MemoryType
+    content: str = Field(min_length=1, max_length=300)
+    source: Literal["profile_confirmation", "user_confirmation"]
+    confirmed_at: datetime
+    updated_at: datetime
+
+    @field_validator("user_id", "content", mode="before")
+    @classmethod
+    def strip_memory_text(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("confirmed_at", "updated_at")
+    @classmethod
+    def require_memory_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("记忆时间必须包含时区")
+        return value
+
+
 class ReminderTransition(HealthOSModel):
     """提醒状态的一次可追溯变化。"""
 
@@ -193,19 +226,37 @@ class Reminder(HealthOSModel):
     content: str = Field(min_length=1, max_length=300)
     scheduled_for: datetime
     timezone_name: str = Field(min_length=1, max_length=100)
+    delivery_channel: Literal["local", "feishu"] = "local"
+    reminder_type: Literal["standard", "check_in"] = "standard"
+    recurrence: Literal["once", "daily", "weekdays"] = "once"
+    check_in_focus: list[Literal["meal", "water", "exercise", "weight"]] = Field(
+        default_factory=list,
+        max_length=4,
+    )
+    destination_label: str = Field(
+        default="本地提醒中心",
+        min_length=1,
+        max_length=120,
+    )
+    destination_key: str = Field(default="local", min_length=1, max_length=128)
+    delivery_attempts: int = Field(default=0, ge=0)
+    last_delivery_at: datetime | None = None
+    last_delivery_error: str | None = Field(default=None, max_length=500)
     status: ReminderStatus = ReminderStatus.SCHEDULED
     created_at: datetime
     updated_at: datetime
     transitions: list[ReminderTransition] = Field(min_length=1)
 
-    @field_validator("content", "timezone_name", mode="before")
+    @field_validator("content", "timezone_name", "destination_label", mode="before")
     @classmethod
     def strip_reminder_text(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("scheduled_for", "created_at", "updated_at")
+    @field_validator("scheduled_for", "created_at", "updated_at", "last_delivery_at")
     @classmethod
-    def require_reminder_timezone(cls, value: datetime) -> datetime:
+    def require_reminder_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("提醒时间必须包含时区")
         return value
@@ -217,5 +268,6 @@ class HealthOSState(HealthOSModel):
     schema_version: Literal["1.0"] = "1.0"
     profiles: dict[str, UserProfile] = Field(default_factory=dict)
     goals: list[HealthGoal] = Field(default_factory=list)
+    memories: list[UserMemory] = Field(default_factory=list)
     reminders: list[Reminder] = Field(default_factory=list)
     idempotency_results: dict[str, dict[str, Any]] = Field(default_factory=dict)

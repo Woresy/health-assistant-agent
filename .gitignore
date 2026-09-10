@@ -16,9 +16,15 @@ ENV/
 htmlcov/
 coverage.xml
 artifacts/rag-reproduction/
+node_modules/
+test-results/
+playwright-report/
+deploy/tencent/runtime-data/
+deploy/tencent/production.env
 
 # Optional repository-local Hugging Face cache
 .cache/huggingface/
+data/index-before-semantic-hints/
 
 # Type-checker and lint caches
 .mypy_cache/

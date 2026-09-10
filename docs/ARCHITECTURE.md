@@ -64,7 +64,8 @@ Windows、macOS 和 Linux 分别维护客户端外壳；未来如果需要远程
 | 健康目标 | 目标类型、数值、周期、原因和不可变版本历史 | SQLite `health_goals` | 自动覆盖的旧版本 |
 | 健康事实 | 已确认的饮食、饮水、体重、运动事件与来源 | SQLite `health_events` | 未确认草稿和模型猜测 |
 | 会话状态 | 用户/助手可见消息、待补参、待确认任务 | SQLite `conversation_sessions` | 隐藏思维链和 Provider 内部状态 |
-| 知识记忆 | 固定知识源、食物数据与可重建 RAG 索引 | 源数据/索引文件 | 单次检索长文本、模型生成结论 |
+| 用户长期记忆 | 用户明确确认的偏好、忌口、教练与提醒偏好 | SQLite `user_memories` | 模型推断、疾病或心理标签、未确认内容 |
+| 健康知识 | 固定知识源、食物数据与可重建 RAG 索引 | 源数据/索引文件 | 单次检索长文本、模型生成结论 |
 | 提醒 | 时间、时区、内容、状态和转换历史 | SQLite `reminders` | 未确认提醒草稿 |
 | 审计轨迹 | 脱敏工具名、状态、错误码和耗时 | JSONL | 健康参数值、令牌、原始对话 |
 
@@ -82,6 +83,10 @@ Windows、macOS 和 Linux 分别维护客户端外壳；未来如果需要远程
 `healthos_state.json` 和会话目录不会被删除；需要回退时设置
 `STORAGE_BACKEND=json` 并重启应用。SQLite 已产生的新记录不会自动反向同步到旧
 文件，因此回滚主要用于迁移验收期，而不是长期双写方案。
+
+用户长期记忆使用 SQLite schema v2 的 `user_memories` 表。查看和导出是直接读取；
+逐条遗忘与全部清除必须经过页面二次确认，并同步移除档案中对应偏好，保证后续 Prompt
+不再使用已删除内容。全部清除只影响长期偏好，不删除健康事实、目标、提醒和对话历史。
 
 ## 五层 Prompt Context Pipeline
 
@@ -217,3 +222,14 @@ prepare_* / create_* / list_or_cancel_*(写意图)
 目标保存不可变版本数组；提醒保存每次状态转换；档案只保存明确允许的最小字段。
 模型推断的疾病、心理状态和原始敏感 Prompt 不进入长期状态。周期汇总只从 committed
 HealthEvent 计算，不把缺失日期补成事实，也不解释变化原因。
+
+## 提醒自动化
+
+本地网页进程可以启用 `ReminderScheduler`。它只扫描用户已确认并保存为
+`scheduled/snoozed` 的飞书提醒，到期后通过受控 `FeishuWebhookNotifier` 发送。
+主动 check-in 作为现有提醒领域模型的重复任务，不增加 Agent Tool：调度时只读取
+当天 committed HealthEvent 生成问题，成功后推进到下一个每天/工作日本地钟点。
+发送目标在草稿阶段以用户可读名称展示，同时保存不可逆目标指纹；Webhook 改变后旧
+任务必须重新确认。网络结果不确定时进入 `unknown` 并停止自动重发。Provider 密钥
+只存在于 `.env`，失败状态和恢复方式详见
+[`AUTOMATION.md`](AUTOMATION.md)。

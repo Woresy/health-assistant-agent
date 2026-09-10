@@ -45,3 +45,10 @@ python scripts/prepare_food_data.py \
 3. `data/samples/foods_sample.json`。
 
 因此不需要修改 repository 即可在公开示例档和本地完整档之间切换。
+
+## 健康知识来源
+
+一般健康知识与食物营养数据分开保存于
+`data/samples/health_knowledge.json`，当前仅采用 WHO 和 CDC 的公开健康生活资料。
+每条文档保留来源机构、URL、适用范围和更新时间；不收录诊断、治疗或个体化处方。
+固定检索与安全回归口径见 `docs/HEALTH_KNOWLEDGE.md`。

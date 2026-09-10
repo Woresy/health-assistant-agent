@@ -12,8 +12,10 @@ from src.agent.models import (
     AgentMessage,
 )
 from src.agent.openai_model import (
+    AgentConfigurationError,
     AgentProtocolError,
     OpenAICompatibleAgentModel,
+    load_agent_settings,
 )
 
 
@@ -89,6 +91,38 @@ def _response(
     )
 
 
+def test_provider_performance_contract_has_a_real_hard_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    monkeypatch.setenv("AGENT_PROVIDER_MODE", "openai_compatible")
+    monkeypatch.setenv("AGENT_API_KEY", "test-only")
+    monkeypatch.setenv("AGENT_MODEL", "test-model")
+    monkeypatch.delenv("AGENT_TARGET_RESPONSE_SECONDS", raising=False)
+    monkeypatch.delenv("AGENT_REQUEST_TIMEOUT", raising=False)
+    monkeypatch.delenv("AGENT_MAX_RETRIES", raising=False)
+
+    settings = load_agent_settings(tmp_path / "missing.env")
+
+    assert settings is not None
+    assert settings.target_response_seconds == 15
+    assert settings.timeout == 60
+    assert settings.max_retries == 0
+
+
+def test_provider_rejects_retries_that_multiply_the_hard_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    monkeypatch.setenv("AGENT_PROVIDER_MODE", "openai_compatible")
+    monkeypatch.setenv("AGENT_API_KEY", "test-only")
+    monkeypatch.setenv("AGENT_MODEL", "test-model")
+    monkeypatch.setenv("AGENT_MAX_RETRIES", "1")
+
+    with pytest.raises(AgentConfigurationError, match="AGENT_MAX_RETRIES"):
+        load_agent_settings(tmp_path / "missing.env")
+
+
 def test_plain_text_reply() -> None:
     client = FakeClient(
         _response(
@@ -132,6 +166,27 @@ def test_plain_text_reply() -> None:
         request["tool_choice"]
         == "auto"
     )
+
+
+def test_thinking_mode_is_forwarded_for_deepseek_compatible_providers() -> None:
+    client = FakeClient(
+        _response(content="完成。")
+    )
+    model = OpenAICompatibleAgentModel(
+        client=client,
+        model="deepseek-v4-flash",
+        thinking_mode="disabled",
+    )
+
+    model.complete(
+        [AgentMessage(role="user", content="创建提醒")],
+        [],
+    )
+
+    request = client.completions.requests[0]
+    assert request["extra_body"] == {
+        "thinking": {"type": "disabled"}
+    }
 
 
 def test_tool_call_is_parsed() -> None:

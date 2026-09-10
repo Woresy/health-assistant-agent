@@ -10,7 +10,7 @@
 
 ## 当前进度
 
-截至 2026-09-04：
+截至 2026-09-09：
 
 - 8.26：完成图片输入、人工食物候选、营养计算、确认和饮食保存主链；
 - 8.27：完成食物数据准备、Hybrid RAG、拒答门控和固定检索评测；
@@ -20,6 +20,9 @@
   缺参 interrupt、写操作 interrupt，并保留 legacy 编排器作为回退。
 - 9.04：完成 HealthOS P1 的个人档案、版本化健康目标、7/14/30 天复盘、
   带来源健康知识和本地提醒闭环；Agent 公开 15 个受控工具。
+- 9.09：增加 GitHub Actions CI、10 张固定图片人工饮食闭环、唯一可移植 RAG
+  报告、12 条 HealthOS 跨工具 E2E、健康知识与安全固定评测，以及记忆查看、
+  逐条遗忘、导出和全部清除。
 
 ### 功能状态
 
@@ -45,17 +48,28 @@
 | 每日汇总 | 已完成 | 确定性汇总只读取 committed events |
 | Agent 执行证据 | 已完成 | 页面展示脱敏 `model_rounds`、`tool_steps`、`state` 和 pending 状态 |
 | AgentTrace JSONL | 已完成 | 发送、确认和取消会脱敏写入 `data/agent_traces.jsonl` |
-| 流程 E2E | 已完成 | 15 条 E2E 覆盖 legacy、LangGraph、成功、缺参、确认、取消、白名单和失败隔离 |
+| LangSmith 可选观测 | 已完成 | LangGraph 节点、模型耗时、错误和线程；健康输入输出默认隐藏 |
+| 流程 E2E | 已完成 | 39 个 Python 流程及 4 个 Chromium 浏览器流程；包含 13 条 HealthOS 跨工具流程和 10 张固定图片人工饮食闭环 |
 | 图片食物识别 | 未完成 | 尚未接入真实 YOLO 权重 |
-| GitHub Actions CI | 未完成 | 最终验收前补充 |
+| GitHub Actions CI | 已完成 | Python 3.11 与 Node 20、编译、全量 pytest、Chromium E2E、离线 RAG 评测和报告 artifact |
+| 性能与冷启动门禁 | 已完成 | Lexical 冷启动、热页面和确定性草稿均有固定阈值与 CI 报告；模型单请求硬超时 60 秒 |
+| 腾讯云香港部署包 | 已完成 | Lighthouse 2 核 4GB、Docker、Caddy HTTPS、Basic Auth、SQLite 持久目录与在线备份 |
 | P1 档案与教练风格 | 已完成 | 最小字段读取，修改先确认，可再次纠正 |
 | P1 健康目标 | 已完成 | 创建、调整、暂停、恢复均保留版本历史 |
 | P1 check-in 与周期复盘 | 已完成 | 7/14/30 天确定性事实、完整度和目标差距 |
-| P1 健康知识 | 已完成 | WHO 来源、引用展示、医疗边界和注入拒答 |
+| P1 健康知识 | 已完成 | WHO/CDC 固定知识源、20 条检索集、20 条安全集、引用与注入拒答 |
 | P1 本地提醒 | 已完成 | 草稿、确认、幂等、查看、延后、暂停、恢复和取消 |
+| 飞书提醒自动化 | 已完成 | 普通提醒及默认关闭的每日/工作日主动 check-in；草稿确认后发送，超时状态待核实且不自动重发 |
 | HealthOS 15 个工具 | 已完成 | 严格 Schema、白名单、Trace 与统一确认中间件 |
 | SQLite 分层存储 | 已完成 | 档案、目标、健康事实、会话与提醒分表持久化，旧数据可迁移回滚 |
 | 五层 Prompt Pipeline | 已完成 | 系统、输入、档案、目标/待办、可信 Tool Result 统一组装 |
+| 记忆自主控制 | 已完成 | 数据与隐私页支持查看、逐条遗忘、JSON 导出和二次确认后全部清除 |
+
+性能基准与超时语义见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md)。
+提交 GitHub 前的密钥、绝对路径、运行数据和交付文件检查见
+[docs/RELEASE.md](docs/RELEASE.md)。
+腾讯云香港轻量应用服务器的购买、部署与验收步骤见
+[docs/DEPLOY_TENCENT.md](docs/DEPLOY_TENCENT.md)。
 
 ## 8.28 完成结果
 
@@ -248,6 +262,7 @@ auto_select_allowed = false
 详细节点、状态、确认和失败回滚说明见
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。LangGraph 的自动化与页面人工
 验收步骤见 [`docs/LANGGRAPH_ACCEPTANCE.md`](docs/LANGGRAPH_ACCEPTANCE.md)。
+飞书机器人配置、可靠性语义和专项验证见 [`docs/AUTOMATION.md`](docs/AUTOMATION.md)。
 
 ```mermaid
 flowchart TD
@@ -432,7 +447,7 @@ Reciprocal Rank Fusion 使用 Lexical 和 Dense 两个通道的排名进行融�
 - 不存在食物；
 - 领域外拒答。
 
-当前 `docs/eval_hybrid.json` 结果：
+仓库唯一权威报告为 `docs/eval_report.json`，当前结果：
 
 | 指标 | 当前结果 | 门槛 |
 | --- | ---: | ---: |
@@ -475,6 +490,7 @@ Reciprocal Rank Fusion 使用 Lexical 和 Dense 两个通道的排名进行融�
 
 ```text
 health-assistant-agent/
+├── .github/workflows/ci.yml
 ├── app.py
 ├── requirements.txt
 ├── .env.example
@@ -485,7 +501,8 @@ health-assistant-agent/
 │   ├── aliases.json
 │   ├── retrieval_hints.json
 │   ├── samples/
-│   │   └── foods_sample.json
+│   │   ├── foods_sample.json
+│   │   └── health_knowledge.json
 │   └── index/
 │       ├── food_documents.json
 │       ├── food_embeddings.npy
@@ -495,14 +512,15 @@ health-assistant-agent/
 │   ├── ARCHITECTURE.md
 │   ├── DECISIONS.md
 │   ├── EVALUATION.md
+│   ├── HEALTH_KNOWLEDGE.md
 │   ├── LANGGRAPH_ACCEPTANCE.md
 │   ├── RAG.md
 │   ├── TOOLS.md
-│   ├── eval_hybrid.json
-│   ├── eval_lexical.json
+│   ├── eval_report.json
 │   └── scope.md
 ├── scripts/
 │   ├── prepare_food_data.py
+│   ├── generate_acceptance_images.py
 │   ├── build_food_index.py
 │   ├── run_eval.py
 │   ├── reproduce_rag.py
@@ -529,6 +547,8 @@ health-assistant-agent/
 │   │   ├── retrieval_trace.py
 │   │   ├── evaluation.py
 │   │   └── text_normalize.py
+│   ├── knowledge/
+│   │   └── repository.py
 │   ├── storage/
 │   │   ├── jsonl_store.py
 │   │   └── trace_store.py
@@ -549,12 +569,17 @@ health-assistant-agent/
     ├── e2e/
     │   ├── test_agent_health_flows.py
     │   ├── test_langgraph_health_flows.py
-    │   └── test_manual_meal_flow.py
+    │   ├── test_manual_meal_flow.py
+    │   ├── test_ten_manual_meal_images.py
+    │   └── test_healthos_p1_agent_flows.py
     ├── eval/
     │   ├── nutrition_retrieval.jsonl
+    │   ├── health_knowledge.jsonl
+    │   ├── health_safety.jsonl
     │   └── test_retrieval_eval.py
     ├── fixtures/
-    │   └── meal.png
+    │   ├── meal.png
+    │   └── meals/  # 10 张固定 JPG 与 cases.json
     └── unit/
         ├── test_agent_tool_router_normalization.py
         ├── test_daily_summary.py
@@ -662,9 +687,12 @@ AGENT_BASE_URL=<Provider的OpenAI-compatible-Base-URL>
 AGENT_MODEL=<支持Tool-Calling的模型名称>
 AGENT_ORCHESTRATOR=langgraph
 
+AGENT_TARGET_RESPONSE_SECONDS=15
 AGENT_REQUEST_TIMEOUT=60
-AGENT_MAX_RETRIES=2
+AGENT_MAX_RETRIES=0
 AGENT_MAX_TOKENS=1024
+# auto / enabled / disabled；非 DeepSeek Provider 建议保留 auto
+AGENT_THINKING_MODE=auto
 
 HEALTH_CONFIRMATION_SECRET=<至少32位的本地随机字符串>
 ```
@@ -676,6 +704,8 @@ AGENT_PROVIDER_MODE=openai_compatible
 AGENT_API_KEY=<你的DeepSeek-API-Key>
 AGENT_BASE_URL=https://api.deepseek.com
 AGENT_MODEL=deepseek-v4-flash
+# 健康记录和提醒属于短 Tool Call，关闭高强度思考可显著降低等待时间
+AGENT_THINKING_MODE=disabled
 ```
 
 注意：
@@ -1022,7 +1052,7 @@ python -m pytest -q tests/eval
 python -m pytest -q tests/e2e
 ```
 
-当前 E2E 不启动真实浏览器，覆盖：
+Python 流程 E2E 不启动真实浏览器，覆盖：
 
 - 固定图片输入校验；
 - 食物检索；
@@ -1046,8 +1076,9 @@ python -m pytest -q tests/e2e
 - LangGraph 工具强制调用门控；
 - LangGraph 确认失败后重新暂停并安全重试。
 
-当前共 15 条 E2E，其中原有主链 9 条、LangGraph 专项 6 条，满足 PRD
-“至少 8 条完整流程”的要求。
+当前 `tests/e2e` 共收集 39 个测试用例，其中包含 13 条 HealthOS 跨工具流程和
+10 张固定图片的人工饮食闭环，满足 PRD“至少 8 条完整流程”的要求。固定图片
+验证的是上传、人工候选、确定性计算、确认和保存，不冒充尚未实现的视觉识别效果。
 
 ## 运行 RAG 离线评测
 
@@ -1060,7 +1091,7 @@ python -m pytest -q tests/e2e
 python scripts/run_eval.py \
   --mode lexical \
   --data data/samples/foods_sample.json \
-  --report docs/eval_lexical.json
+  --report /tmp/eval_lexical.json
 ```
 
 ### Hybrid
@@ -1070,7 +1101,7 @@ python scripts/run_eval.py \
   --mode hybrid \
   --data data/samples/foods_sample.json \
   --index-dir data/index \
-  --report docs/eval_hybrid.json
+  --report docs/eval_report.json
 ```
 
 验收门槛：
@@ -1366,20 +1397,23 @@ Trace 仅保留会话和用户哈希、输入长度和哈希、状态、模型�
 - [x] 每日确定性汇总联合验收；
 - [x] 多轮缺参追问和 `pending_task`；
 - [x] 脱敏 `AgentTrace JSONL`；
-- [x] 15 条完整流程 E2E（含 6 条 LangGraph 专项 E2E）；
+- [x] 39 个流程 E2E 用例（含 13 条 HealthOS 跨工具流程）；
 - [x] 失败不落数据和 Trace 失败隔离；
 - [x] 明确健康意图的工具强制调用门控；
 - [x] 健康安全边界；
 - [x] 隐私和 Git 忽略规则；
 - [x] 核心人工饮食 E2E；
+- [x] 10 张固定图片的人工饮食闭环；
+- [x] 健康知识 20 条固定评测与 20 条安全回归；
+- [x] 唯一且无开发机绝对路径的 RAG 权威报告；
+- [x] 记忆查看、逐条遗忘、导出和全部清除；
+- [x] GitHub Actions CI；
 - [x] `docs/ARCHITECTURE.md`；
 - [x] LangGraph 人工验收手册。
 
 ### 进行中或未完成
 
-- [ ] 浏览器级 E2E；
-- [ ] GitHub Actions CI；
-- [ ] 至少 10 张固定验收图片；
+- [x] 浏览器级 E2E：刷新恢复、记录跳转修改、记忆二次确认与移动端布局；
 - [ ] 真实 YOLO 冒烟与失败回退；
 - [ ] 由未参与开发的人完成十分钟启动验证；
 - [x] P1 档案、目标、记忆和 check-in；

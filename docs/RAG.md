@@ -36,7 +36,8 @@ Hugging Face。
 3. 使用公开示例数据和人工语义提示重建 `data/index`；
 4. 运行 Lexical 固定评测；
 5. 运行 Hybrid 固定评测，并验证 Dense 没有降级；
-6. 写出两个评测报告和一份复现汇总。
+6. 写出两份临时模式明细和一份复现汇总；仓库权威结果仍只有
+   `docs/eval_report.json`。
 
 成功时最后一行会显示：
 
@@ -79,7 +80,8 @@ artifacts/rag-reproduction/eval_hybrid.json
 artifacts/rag-reproduction/reproduction_summary.json
 ```
 
-报告目录属于本地构建产物，不提交 GitHub。
+报告目录属于本地诊断产物，不提交 GitHub，也不作为第二份权威结论。提交与评审只认
+`docs/eval_report.json`；该报告使用仓库相对路径，并由测试阻止旧冲突报告再次出现。
 
 ## 离线复跑
 

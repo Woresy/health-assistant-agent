@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from src.agent.context_pipeline import build_prompt_context
 from src.agent.models import (
@@ -56,6 +59,11 @@ SYSTEM_PROMPT = """
 19. 教练风格只改变表达，不得改变事实、数值、来源、安全规则或确认要求。
 20. “我今天吃了什么”“今天喝了多少”“今天记录了什么”等问句属于查询，调用
    get_health_events 或 get_daily_summary，不得误建为新增草稿。
+21. 用户明确要求飞书通知时，create_reminder_draft 使用 delivery_channel=feishu；
+   Webhook 和签名密钥只由应用配置提供，不得向用户索取或在回答中展示。
+22. 主动 check-in 复用 create_reminder_draft，使用 reminder_type=check_in、
+   recurrence=daily 或 weekdays、delivery_channel=feishu；它只询问已确认记录是否需要
+   补充，不得把缺少记录表述成用户没有完成，也不得自动写入健康事实。
 """.strip()
 
 
@@ -136,6 +144,198 @@ TOOL_REQUIRED_RETRY_PROMPT = """
 不要通过普通文本声称已经生成草稿或已经保存。
 如果缺少必填参数，也应提出工具调用，由工具校验生成追问。
 """.strip()
+
+
+_RELATIVE_REMINDER_PATTERN = re.compile(
+    r"(?P<amount>\d{1,4}|[一二两三四五六七八九十]{1,3})\s*"
+    r"(?P<unit>分钟|小时)\s*后\s*"
+    r"(?:(?:通过|用)\s*)?(?P<channel>飞书|本地)?\s*"
+    r"提醒我(?P<content>.+)"
+)
+
+
+def _duration_number(raw_value: str) -> int | None:
+    """解析提醒快路径需要的小型中文整数。"""
+
+    if raw_value.isdigit():
+        value = int(raw_value)
+        return value if value > 0 else None
+
+    digits = {
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    if raw_value in digits:
+        return digits[raw_value]
+    if raw_value == "十":
+        return 10
+    if "十" in raw_value:
+        tens_text, ones_text = raw_value.split("十", 1)
+        tens = digits.get(tens_text, 1) if tens_text else 1
+        ones = digits.get(ones_text, 0) if ones_text else 0
+        return tens * 10 + ones
+    return None
+
+
+def _try_direct_relative_reminder(
+    *,
+    session_state: SessionState,
+    user_text: str,
+    router: HealthToolRouter,
+) -> AgentTurnOutcome | None:
+    """明确的相对提醒和主动 check-in 走确定性草稿路径。"""
+
+    normalized_text = user_text.strip()
+    is_check_in = (
+        "飞书" in normalized_text
+        and ("主动" in normalized_text or "check-in" in normalized_text.casefold())
+        and ("每天" in normalized_text or "工作日" in normalized_text)
+    )
+    if is_check_in:
+        time_match = re.search(
+            r"(?P<period>上午|下午|晚上)?\s*(?P<hour>\d{1,2})\s*点"
+            r"(?:\s*(?P<minute>\d{1,2})\s*分)?",
+            normalized_text,
+        )
+        if time_match is None:
+            return None
+        hour = int(time_match.group("hour"))
+        minute = int(time_match.group("minute") or 0)
+        period = time_match.group("period") or ""
+        if period in {"下午", "晚上"} and hour < 12:
+            hour += 12
+        if period == "上午" and hour == 12:
+            hour = 0
+        if hour > 23 or minute > 59:
+            return None
+        active_timezone = ZoneInfo(session_state.timezone_name)
+        now = datetime.now(active_timezone)
+        scheduled_for = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        recurrence = "weekdays" if "工作日" in normalized_text else "daily"
+        while scheduled_for <= now or (
+            recurrence == "weekdays" and scheduled_for.weekday() >= 5
+        ):
+            scheduled_for += timedelta(days=1)
+        focus_labels = {
+            "饮食": "meal",
+            "吃": "meal",
+            "饮水": "water",
+            "喝水": "water",
+            "运动": "exercise",
+            "体重": "weight",
+        }
+        check_in_focus = list(
+            dict.fromkeys(
+                value for label, value in focus_labels.items() if label in normalized_text
+            )
+        ) or ["meal", "water", "exercise"]
+        content = "主动健康 check-in"
+        arguments = {
+            "content": content,
+            "scheduled_for": scheduled_for.isoformat(),
+            "timezone_name": session_state.timezone_name,
+            "delivery_channel": "feishu",
+            "reminder_type": "check_in",
+            "recurrence": recurrence,
+            "check_in_focus": check_in_focus,
+        }
+    else:
+        matched = _RELATIVE_REMINDER_PATTERN.fullmatch(normalized_text)
+        if matched is None:
+            return None
+        amount = _duration_number(matched.group("amount"))
+        if amount is None:
+            return None
+        delta = (
+            timedelta(minutes=amount)
+            if matched.group("unit") == "分钟"
+            else timedelta(hours=amount)
+        )
+        scheduled_for = (
+            datetime.now(ZoneInfo(session_state.timezone_name)) + delta
+        ).replace(microsecond=0)
+        content = matched.group("content").strip(" ，。！？!?；;")
+        if not content:
+            return None
+        arguments = {
+            "content": content,
+            "scheduled_for": scheduled_for.isoformat(),
+            "timezone_name": session_state.timezone_name,
+            "delivery_channel": (
+                "feishu" if matched.group("channel") == "飞书" else "local"
+            ),
+        }
+
+    call_id = f"direct-reminder-{session_state.turn_count + 1}"
+    dispatch = router.dispatch(
+        tool_name="create_reminder_draft",
+        arguments=arguments,
+        user_id=session_state.user_id,
+        timezone_name=session_state.timezone_name,
+        session_id=session_state.session_id,
+        call_id=call_id,
+    )
+    if dispatch.status != "executed" or dispatch.result is None:
+        return None
+
+    result_data = dispatch.result.get("data")
+    if dispatch.result.get("ok") and isinstance(result_data, dict):
+        pending = PendingConfirmation(
+            action="reminder_create",
+            tool_name="create_reminder_draft",
+            draft_data=result_data,
+        )
+        answer = _preview_answer(result_data)
+        state = AgentState.AWAITING_CONFIRMATION
+        finish_reason = AgentFinishReason.AWAITING_CONFIRMATION
+    else:
+        pending = None
+        error = dispatch.result.get("error")
+        answer = (
+            str(error.get("message", "提醒草稿生成失败"))
+            if isinstance(error, dict)
+            else "提醒草稿生成失败"
+        )
+        state = AgentState.FAILED
+        finish_reason = AgentFinishReason.TOOL_ERROR
+
+    messages = (
+        *session_state.messages,
+        AgentMessage(role="user", content=user_text.strip()),
+        AgentMessage(role="assistant", content=answer),
+    )
+    step = AgentToolStep(
+        call_id=call_id,
+        tool_name="create_reminder_draft",
+        arguments=arguments,
+        result=_redact_result(dispatch.result),
+    )
+    new_state = SessionState(
+        session_id=session_state.session_id,
+        user_id=session_state.user_id,
+        timezone_name=session_state.timezone_name,
+        state=state,
+        messages=messages,
+        turn_count=session_state.turn_count + 1,
+        pending_confirmation=pending,
+    )
+    result = AgentRunResult(
+        answer=answer,
+        finish_reason=finish_reason,
+        state=state,
+        model_rounds=0,
+        tool_steps=(step,),
+        pending_confirmation=pending,
+    )
+    return AgentTurnOutcome(result=result, session_state=new_state)
 
 
 def _requires_health_tool(
@@ -532,11 +732,32 @@ def _preview_answer(
         )
 
     if action == "reminder_create":
+        destination = preview.get("destination_label", "本地提醒中心")
+        if preview.get("reminder_type") == "check_in":
+            recurrence = "工作日" if preview.get("recurrence") == "weekdays" else "每天"
+            focus_labels = {
+                "meal": "饮食",
+                "water": "饮水",
+                "exercise": "运动",
+                "weight": "体重",
+            }
+            focus = "、".join(
+                focus_labels.get(str(item), str(item))
+                for item in preview.get("check_in_focus", [])
+            )
+            return (
+                "主动 check-in 草稿已经准备好，目前还没有启用。\n\n"
+                f"**{recurrence}主动询问：{focus or '饮食、饮水和运动'}**  "
+                f"首次发送 {preview.get('scheduled_for', '')}\n\n"
+                f"发送到：{destination}；时区：{preview.get('timezone_name', '')}。"
+                "届时只根据已确认记录询问是否需要补记，不会自动写入；确认后才启用。"
+            )
         return (
             "提醒草稿已经准备好，目前还没有安排。\n\n"
             f"**{preview.get('content', '健康提醒')}**  "
             f"{preview.get('scheduled_for', '')}\n\n"
-            f"时区：{preview.get('timezone_name', '')}。确认后只会创建一次。"
+            f"发送到：{destination}；时区：{preview.get('timezone_name', '')}。"
+            "确认后只会创建一次。"
         )
 
     if action == "reminder_change":
@@ -682,6 +903,14 @@ class AgentRunner:
                 ),
             )
 
+        direct_reminder = _try_direct_relative_reminder(
+            session_state=session_state,
+            user_text=normalized_text,
+            router=self._router,
+        )
+        if direct_reminder is not None:
+            return direct_reminder
+
         messages = list(session_state.messages)
         messages.append(
             AgentMessage(
@@ -721,8 +950,14 @@ class AgentRunner:
                 )
             reply = self._model.complete(
                 messages,
-                self._router
-                .tool_definitions,
+                self._router.tool_definitions_for(
+                    normalized_text,
+                    pending_tool_name=(
+                        pending_task.tool_name
+                        if pending_task is not None
+                        else None
+                    ),
+                ),
             )
 
             if not reply.tool_calls:

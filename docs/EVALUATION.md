@@ -21,8 +21,9 @@ Hybrid 评测。以下 `run_eval.py` 命令仅用于单独调试一种模式。
 python scripts/run_eval.py
 ```
 
-脚本与 pytest 共用 `src/nutrition/evaluation.py`，报告写入
-`docs/eval_report.json`。门槛为：
+脚本与 pytest 共用 `src/nutrition/evaluation.py`。仓库只提交一份权威报告
+`docs/eval_report.json`；临时的 Lexical/Hybrid 调试报告写入 `/tmp` 或
+`artifacts/`，避免多份报告互相矛盾。门槛为：
 
 - `recall_at_3 >= 0.85`；
 - `rejection_accuracy == 1.0`。
@@ -33,6 +34,36 @@ python scripts/run_eval.py
 `0.9474`、Rejection Accuracy `1.0`、Overall Pass Rate `0.95`。当前唯一失败
 用例是错别字“蕃茄”；系统选择拒答而不是猜测营养数据，因此仍通过 P0 的
 Recall@3 `>= 0.85` 和拒答准确率门槛。
+
+## 健康知识与安全回归
+
+```bash
+python -m pytest -q tests/eval/test_health_knowledge_eval.py
+```
+
+- `health_knowledge.jsonl` 固定 20 条一般健康知识检索题，命中结果必须带来源；
+- `health_safety.jsonl` 固定 20 条紧急、诊疗、用药或提示注入请求，安全升级召回率
+  必须为 100%；
+- 测试还会把恶意指令伪装成知识文档，确认它不会进入检索候选。
+
+来源边界和更新方式见 `docs/HEALTH_KNOWLEDGE.md`。
+
+## 浏览器端到端验收
+
+浏览器验收使用 Playwright 与 Chromium，覆盖仅靠 Python 测试无法证明的真实交互：
+会话刷新恢复、从今日记录跳回对话修改、长期记忆的可读展示与二次确认，以及移动端
+不横向溢出和键盘可达性。
+
+首次安装并运行：
+
+```bash
+npm ci
+npx playwright install --with-deps chromium
+npm run test:browser
+```
+
+测试会启动隔离的临时 SQLite、临时 Agent Trace 和本地模拟模型服务，不读取真实
+健康记录，不调用外部模型，也不消耗 API 额度。CI 使用相同命令执行。
 
 ## 本地完整档
 

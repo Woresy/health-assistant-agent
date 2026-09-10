@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-04T12:25:24Z",
+  "title": "Design System: HealthOS · 小满健康助手",
+  "extensions": {
+    "colorMeta": {
+      "workbench-ink": { "role": "primary", "displayName": "工作台墨绿", "canonical": "#17382f", "tonalRamp": ["oklch(15% 0.035 166)", "oklch(25% 0.035 166)", "oklch(35% 0.035 166)", "oklch(48% 0.035 166)", "oklch(60% 0.035 166)", "oklch(72% 0.035 166)", "oklch(84% 0.035 166)", "oklch(95% 0.035 166)"] },
+      "ink-soft": { "role": "neutral", "displayName": "柔和墨绿", "canonical": "#31564b", "tonalRamp": ["oklch(15% 0.03 166)", "oklch(25% 0.03 166)", "oklch(35% 0.03 166)", "oklch(48% 0.03 166)", "oklch(60% 0.03 166)", "oklch(72% 0.03 166)", "oklch(84% 0.03 166)", "oklch(95% 0.03 166)"] },
+      "action-green": { "role": "primary", "displayName": "行动青绿", "canonical": "#2f765e", "tonalRamp": ["oklch(15% 0.07 165)", "oklch(25% 0.07 165)", "oklch(35% 0.07 165)", "oklch(48% 0.07 165)", "oklch(60% 0.07 165)", "oklch(72% 0.07 165)", "oklch(84% 0.07 165)", "oklch(95% 0.07 165)"] },
+      "action-green-deep": { "role": "primary", "displayName": "行动深绿", "canonical": "#225846", "tonalRamp": ["oklch(15% 0.06 165)", "oklch(25% 0.06 165)", "oklch(35% 0.06 165)", "oklch(48% 0.06 165)", "oklch(60% 0.06 165)", "oklch(72% 0.06 165)", "oklch(84% 0.06 165)", "oklch(95% 0.06 165)"] },
+      "confirmation-mint": { "role": "secondary", "displayName": "确认薄荷绿", "canonical": "#dff0df", "tonalRamp": ["oklch(15% 0.04 145)", "oklch(25% 0.04 145)", "oklch(35% 0.04 145)", "oklch(48% 0.04 145)", "oklch(60% 0.04 145)", "oklch(72% 0.04 145)", "oklch(84% 0.04 145)", "oklch(95% 0.04 145)"] },
+      "next-step-lime": { "role": "tertiary", "displayName": "下一步青柠", "canonical": "#dceea8", "tonalRamp": ["oklch(15% 0.09 112)", "oklch(25% 0.09 112)", "oklch(35% 0.09 112)", "oklch(48% 0.09 112)", "oklch(60% 0.09 112)", "oklch(72% 0.09 112)", "oklch(84% 0.09 112)", "oklch(95% 0.09 112)"] },
+      "workbench-canvas": { "role": "neutral", "displayName": "工作台画布", "canonical": "#e9efe9", "tonalRamp": ["oklch(15% 0.012 150)", "oklch(25% 0.012 150)", "oklch(35% 0.012 150)", "oklch(48% 0.012 150)", "oklch(60% 0.012 150)", "oklch(72% 0.012 150)", "oklch(84% 0.012 150)", "oklch(95% 0.012 150)"] },
+      "workbench-surface": { "role": "neutral", "displayName": "冷白工作面", "canonical": "#f8faf8", "tonalRamp": ["oklch(15% 0.006 150)", "oklch(25% 0.006 150)", "oklch(35% 0.006 150)", "oklch(48% 0.006 150)", "oklch(60% 0.006 150)", "oklch(72% 0.006 150)", "oklch(84% 0.006 150)", "oklch(95% 0.006 150)"] },
+      "warm-surface": { "role": "neutral", "displayName": "暖白壳面", "canonical": "#fffdf7", "tonalRamp": ["oklch(15% 0.01 95)", "oklch(25% 0.01 95)", "oklch(35% 0.01 95)", "oklch(48% 0.01 95)", "oklch(60% 0.01 95)", "oklch(72% 0.01 95)", "oklch(84% 0.01 95)", "oklch(95% 0.01 95)"] },
+      "card-white": { "role": "neutral", "displayName": "卡片白", "canonical": "#ffffff", "tonalRamp": ["oklch(15% 0 0)", "oklch(25% 0 0)", "oklch(35% 0 0)", "oklch(48% 0 0)", "oklch(60% 0 0)", "oklch(72% 0 0)", "oklch(84% 0 0)", "oklch(95% 0 0)"] },
+      "secondary-surface": { "role": "neutral", "displayName": "次级控制面", "canonical": "#f4f7f1", "tonalRamp": ["oklch(15% 0.012 135)", "oklch(25% 0.012 135)", "oklch(35% 0.012 135)", "oklch(48% 0.012 135)", "oklch(60% 0.012 135)", "oklch(72% 0.012 135)", "oklch(84% 0.012 135)", "oklch(95% 0.012 135)"] },
+      "field-surface": { "role": "neutral", "displayName": "字段浅绿白", "canonical": "#f7f9f5", "tonalRamp": ["oklch(15% 0.008 135)", "oklch(25% 0.008 135)", "oklch(35% 0.008 135)", "oklch(48% 0.008 135)", "oklch(60% 0.008 135)", "oklch(72% 0.008 135)", "oklch(84% 0.008 135)", "oklch(95% 0.008 135)"] },
+      "divider-green": { "role": "neutral", "displayName": "绿灰分隔线", "canonical": "#d6e1d8", "tonalRamp": ["oklch(15% 0.018 150)", "oklch(25% 0.018 150)", "oklch(35% 0.018 150)", "oklch(48% 0.018 150)", "oklch(60% 0.018 150)", "oklch(72% 0.018 150)", "oklch(84% 0.018 150)", "oklch(95% 0.018 150)"] },
+      "muted-text": { "role": "neutral", "displayName": "静音绿灰", "canonical": "#53675d", "tonalRamp": ["oklch(15% 0.018 155)", "oklch(25% 0.018 155)", "oklch(35% 0.018 155)", "oklch(48% 0.018 155)", "oklch(60% 0.018 155)", "oklch(72% 0.018 155)", "oklch(84% 0.018 155)", "oklch(95% 0.018 155)"] },
+      "danger-surface": { "role": "neutral", "displayName": "克制风险底", "canonical": "#fff3ef", "tonalRamp": ["oklch(15% 0.025 35)", "oklch(25% 0.025 35)", "oklch(35% 0.025 35)", "oklch(48% 0.025 35)", "oklch(60% 0.025 35)", "oklch(72% 0.025 35)", "oklch(84% 0.025 35)", "oklch(95% 0.025 35)"] },
+      "danger-text": { "role": "neutral", "displayName": "克制风险文字", "canonical": "#9d5547", "tonalRamp": ["oklch(15% 0.07 35)", "oklch(25% 0.07 35)", "oklch(35% 0.07 35)", "oklch(48% 0.07 35)", "oklch(60% 0.07 35)", "oklch(72% 0.07 35)", "oklch(84% 0.07 35)", "oklch(95% 0.07 35)"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "页面判断", "purpose": "页面级判断与工作区标题。" },
+      "headline": { "displayName": "系统标题", "purpose": "品牌信息与高层级标题。" },
+      "title": { "displayName": "任务标题", "purpose": "卡片标题、确认摘要与局部结论。" },
+      "body": { "displayName": "操作正文", "purpose": "输入、说明和主要正文。" },
+      "label": { "displayName": "状态标签", "purpose": "导航分组、状态与元数据。" }
+    },
+    "shadows": [
+      { "name": "decision-float", "value": "0 14px 34px rgba(23, 56, 47, .08)", "purpose": "只抬起最高优先级的判断摘要。" },
+      { "name": "selected-inset", "value": "inset 0 0 0 1px rgba(47, 118, 94, .08)", "purpose": "为浅色选中状态补充轻微结构边界。" }
+    ],
+    "motion": [
+      { "name": "control-response", "value": "160ms ease", "purpose": "按钮按下、背景和边框变化。" },
+      { "name": "navigation-state", "value": "180ms ease-out", "purpose": "导航悬停与选中反馈。" },
+      { "name": "confirmation-arrive", "value": "200ms ease-out", "purpose": "确认与完成状态轻微上移淡入；减少动态效果时禁用。" }
+    ],
+    "breakpoints": [
+      { "name": "workbench-collapse", "value": "980px" },
+      { "name": "mobile", "value": "680px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "当前流程唯一的主要动作。",
+      "html": "<button class=\"ds-btn-primary\">确认保存</button>",
+      "css": ".ds-btn-primary { min-height: 42px; padding: 9px 14px; border: 1px solid var(--care-green, #2f765e); border-radius: 10px; background: var(--care-green, #2f765e); color: #fff; font: 680 14px/1.2 -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif; transition: transform .16s ease, background .16s ease, border-color .16s ease; } .ds-btn-primary:hover { border-color: var(--care-green-dark, #225846); background: var(--care-green-dark, #225846); } .ds-btn-primary:active { transform: scale(.98); } .ds-btn-primary:focus-visible { outline: 3px solid rgba(47,118,94,.28); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "刷新、管理和支持性动作。",
+      "html": "<button class=\"ds-btn-secondary\">刷新状态</button>",
+      "css": ".ds-btn-secondary { min-height: 42px; padding: 9px 14px; border: 1px solid var(--care-line, #d6e1d8); border-radius: 10px; background: #f4f7f1; color: var(--care-ink-soft, #31564b); font: 680 14px/1.2 -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif; transition: transform .16s ease, background .16s ease, border-color .16s ease; } .ds-btn-secondary:hover { background: #e9f0e7; } .ds-btn-secondary:active { transform: scale(.98); } .ds-btn-secondary:focus-visible { outline: 3px solid rgba(47,118,94,.28); outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "取消、删除或停止类动作，以克制风险色表达。",
+      "html": "<button class=\"ds-btn-danger\">取消草稿</button>",
+      "css": ".ds-btn-danger { min-height: 42px; padding: 9px 14px; border: 1px solid #ecd6d0; border-radius: 10px; background: #fff3ef; color: #9d5547; font: 680 14px/1.2 -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif; transition: transform .16s ease, background .16s ease, border-color .16s ease; } .ds-btn-danger:active { transform: scale(.98); } .ds-btn-danger:focus-visible { outline: 3px solid rgba(47,118,94,.28); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "轻量记录和筛选输入。",
+      "html": "<label class=\"ds-field\"><span>记录内容</span><input placeholder=\"例如：喝了 300ml 水\"></label>",
+      "css": ".ds-field { display: grid; gap: 6px; color: var(--care-ink-soft, #31564b); font: 700 12px/1.4 -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif; } .ds-field input { min-height: 42px; padding: 9px 12px; border: 1px solid var(--care-line, #d6e1d8); border-radius: 10px; background: #f7f9f5; color: var(--care-ink, #17382f); font: 400 14px/1.5 inherit; } .ds-field input::placeholder { color: var(--care-muted, #53675d); opacity: 1; } .ds-field input:focus-visible { outline: 3px solid rgba(47,118,94,.28); outline-offset: 2px; }"
+    },
+    {
+      "name": "Navigation Item",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "工作台系统地图中的默认项与当前项。",
+      "html": "<nav class=\"ds-nav\" aria-label=\"工作台\"><button>今天</button><button aria-current=\"page\">记录</button><button>趋势</button></nav>",
+      "css": ".ds-nav { display: grid; gap: 4px; width: 202px; padding: 12px; background: var(--care-ink, #17382f); } .ds-nav button { min-height: 40px; padding: 9px 12px; border: 0; border-radius: 9px; background: transparent; color: #c7d6ce; text-align: left; font: 680 13px/1.2 -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif; transition: background-color .18s ease-out, color .18s ease-out, transform .16s ease-out; } .ds-nav button:hover { background: rgba(255,255,255,.08); color: #f6faf7; } .ds-nav button[aria-current=\"page\"] { background: var(--care-lime, #dceea8); color: var(--care-ink, #17382f); } .ds-nav button:focus-visible { outline: 3px solid rgba(220,238,168,.55); outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "status-chip",
+      "description": "短状态、确认状态或当前选择。",
+      "html": "<span class=\"ds-status-chip\">等待确认</span>",
+      "css": ".ds-status-chip { display: inline-flex; align-items: center; padding: 5px 8px; border-radius: 999px; background: var(--care-mint, #dff0df); color: var(--care-green-dark, #225846); font: 750 11px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif; }"
+    },
+    {
+      "name": "Workbench Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "普通任务、记录和数据内容的基础容器。",
+      "html": "<section class=\"ds-card\"><h3>今日记录</h3><p>已确认的事实会出现在这里，并保持可修改。</p></section>",
+      "css": ".ds-card { padding: 18px; border: 1px solid var(--care-line, #d6e1d8); border-radius: 14px; background: #fff; color: var(--care-ink, #17382f); font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif; } .ds-card h3 { margin: 0 0 4px; font-size: 16px; line-height: 1.35; letter-spacing: -.015em; } .ds-card p { margin: 0; max-width: 70ch; color: var(--care-muted, #53675d); font-size: 12px; line-height: 1.6; }"
+    },
+    {
+      "name": "Confirmation Card",
+      "kind": "custom",
+      "description": "把待写入内容、状态和后果组织成可核对的签名组件。",
+      "html": "<section class=\"ds-confirmation\"><header><i>确</i><div><strong>保存这条记录？</strong><span>写入前请核对内容</span></div><b>等待确认</b></header><div class=\"ds-confirmation-summary\"><span>饮水</span><strong>300 ml</strong></div><p>确认后写入本地记录，之后仍可修改或删除。</p></section>",
+      "css": ".ds-confirmation { padding: 15px; border: 1px solid #cfe0d0; border-radius: 14px; background: #fbfdf8; color: var(--care-ink, #17382f); font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif; } .ds-confirmation header { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 10px; align-items: center; } .ds-confirmation header i { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 10px; background: #e8f2e3; color: var(--care-green-dark, #225846); font: 800 12px/1 sans-serif; font-style: normal; } .ds-confirmation header strong, .ds-confirmation header span { display: block; } .ds-confirmation header strong { font-size: 14px; line-height: 1.35; } .ds-confirmation header span, .ds-confirmation p { color: var(--care-muted, #53675d); font-size: 11px; line-height: 1.5; } .ds-confirmation header b { padding: 5px 8px; border-radius: 999px; background: #eef4ea; color: var(--care-green-dark, #225846); font-size: 10px; } .ds-confirmation-summary { display: flex; justify-content: space-between; margin-top: 12px; padding: 12px 13px; border-radius: 11px; background: #eef5e9; } .ds-confirmation-summary strong { font-size: 16px; } .ds-confirmation p { margin: 10px 1px 0; } @media (prefers-reduced-motion: no-preference) { .ds-confirmation { animation: ds-confirmation-arrive .2s ease-out both; } @keyframes ds-confirmation-arrive { from { opacity: .82; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "个人健康工作台",
+    "overview": "HealthOS 的视觉系统像一张安静、可靠的个人工作台：冷白工作面承载事实，深墨绿结构提供方向，青绿操作色让可执行动作清楚可见。它把注意力放在“现在应判断什么、下一步做什么”，而不是把健康数据堆成令人紧张的专业仪表盘。\n\n系统的气质平静、具体且有边界。信息密度可以高，但通过稳定分组、短标签、轻分隔与清楚的确认状态维持可扫描性；本地保存、写入前确认和可纠正性应在关键状态中持续可见。主要用户希望在很短时间内完成记录，因此控件保持熟悉、目标明确，不用装饰制造额外认知负担。",
+    "keyCharacteristics": ["决策优先：先突出判断、下一步与待确认动作，再提供完整证据。", "冷静可信：低饱和绿系、冷白表面和短促反馈避免医疗化与焦虑感。", "本地可控：确认、撤销、状态和数据边界使用明确而非戏剧化的视觉语言。", "工作台结构：稳定的系统导航、工作面和工具组件形成连续操作环境。", "固定浅色：当前实现只提供浅色视觉，以避免宿主暗色继承造成局部黑底与不可读内容。"],
+    "rules": [
+      { "name": "The Lime Means Next Rule", "body": "下一步青柠只表示当前选择、直接下一步或关键方向，不用于普通装饰和大面积品牌铺色。", "section": "colors" },
+      { "name": "The Fixed-Light Rule", "body": "当前实现必须把浅色与暗色宿主 token 都映射到同一套浅色值；这是为修复浏览器或 Gradio 暗色继承导致的黑色不可读区域，不代表已实现暗色主题。", "section": "colors" },
+      { "name": "The System-Font Honesty Rule", "body": "不指定并未随产品交付的定制字体；新增界面继续使用现有中文系统 UI 栈。", "section": "typography" },
+      { "name": "The Workbench Map Rule", "body": "系统级导航必须稳定呈现信息地图；页面内容可以变化，但不能把所有能力重新铺成无层级入口。", "section": "layout" },
+      { "name": "The Flat-by-Default Rule", "body": "普通表面以背景、边框和间距分层；阴影只服务于决策优先级，不作为通用卡片装饰。", "section": "elevation" }
+    ],
+    "dos": ["Do 先用一个清晰结论或下一步建立视觉层级，再展开指标、证据和历史。", "Do 在写入、修改、删除和提醒动作附近持续显示确认状态、影响范围与本地控制信息。", "Do 使用 14px 卡片、10px 控件和 160–220ms 状态过渡维持一致的工作台触感。", "Do 在桌面到移动端的转换中保持记录、确认和今天状态可达。", "Do 让窄屏卡片标题与操作上下重排，让宽表只在自身容器内滚动，不允许按钮撑破页面。", "Do 让浅色与暗色宿主 token 继续映射到同一浅色系统，直至真正设计并验证暗色主题。"],
+    "donts": ["Don't 把界面做成充满仪表、图表和告警色的医疗或专业运动仪表盘。", "Don't 用青柠色装饰普通卡片；它只服务于当前选择和下一步。", "Don't 依赖颜色单独传达成功、风险、删除或是否已写入。", "Don't 引入未经交付的网络字体，或声称系统已有品牌字体资产。", "Don't 让宿主的暗色模式自动覆盖当前组件；已知结果是局部黑底和不可读内容。"]
+  }
+}

@@ -1,0 +1,12 @@
+[
+  {"image": "01-tomato.jpg", "query": "西红柿", "food_code": "FOOD_001", "grams": 180},
+  {"image": "02-rice.jpg", "query": "米饭", "food_code": "FOOD_002", "grams": 150},
+  {"image": "03-egg.jpg", "query": "鸡蛋", "food_code": "FOOD_003", "grams": 60},
+  {"image": "04-chicken.jpg", "query": "鸡胸肉", "food_code": "FOOD_004", "grams": 160},
+  {"image": "05-apple.jpg", "query": "苹果", "food_code": "FOOD_005", "grams": 200},
+  {"image": "06-banana.jpg", "query": "香蕉", "food_code": "FOOD_006", "grams": 120},
+  {"image": "07-potato.jpg", "query": "土豆", "food_code": "FOOD_007", "grams": 180},
+  {"image": "08-cucumber.jpg", "query": "黄瓜", "food_code": "FOOD_008", "grams": 200},
+  {"image": "09-milk.jpg", "query": "牛奶", "food_code": "FOOD_009", "grams": 250},
+  {"image": "10-tofu.jpg", "query": "豆腐", "food_code": "FOOD_010", "grams": 150}
+]

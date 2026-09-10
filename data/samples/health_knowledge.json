@@ -1,0 +1,62 @@
+[
+  {
+    "document_id": "who-physical-activity-2024",
+    "title": "WHO Physical activity fact sheet",
+    "topics": ["运动", "活动", "久坐", "锻炼", "每周运动", "exercise", "physical activity"],
+    "content": "成年人可将每周至少 150 分钟中等强度身体活动作为一般参考；活动可以分散到一周完成。具体安排应结合个人状况。",
+    "source_url": "https://www.who.int/news-room/fact-sheets/detail/physical-activity",
+    "source_organization": "World Health Organization",
+    "updated_at": "2024-06-26",
+    "scope": "成年人一般身体活动信息，不用于制定医疗运动处方。"
+  },
+  {
+    "document_id": "cdc-adult-activity-2023",
+    "title": "CDC Adult Activity: An Overview",
+    "topics": ["力量训练", "肌肉训练", "中等强度", "高强度", "运动计划", "有氧"],
+    "content": "成年人一般可参考每周至少 150 分钟中等强度有氧活动，并在每周至少 2 天进行肌肉强化活动；活动可以拆分完成。",
+    "source_url": "https://www.cdc.gov/physical-activity-basics/guidelines/adults.html",
+    "source_organization": "Centers for Disease Control and Prevention",
+    "updated_at": "2023-12-20",
+    "scope": "成年人一般活动建议；有慢性疾病或特殊情况时应咨询专业人员。"
+  },
+  {
+    "document_id": "who-healthy-diet-2026",
+    "title": "WHO Healthy diet fact sheet",
+    "topics": ["健康饮食", "均衡饮食", "蔬菜", "水果", "全谷物", "膳食纤维", "少加工", "饮食多样", "多样"],
+    "content": "一般健康饮食强调充足、平衡、适度和多样，优先选择多样化、营养丰富且较少加工的食物。",
+    "source_url": "https://www.who.int/news-room/fact-sheets/detail/healthy-diet",
+    "source_organization": "World Health Organization",
+    "updated_at": "2026-01-26",
+    "scope": "一般健康饮食原则，不替代个体化营养或医疗建议。"
+  },
+  {
+    "document_id": "who-sodium-reduction-2026",
+    "title": "WHO Sodium reduction fact sheet",
+    "topics": ["盐", "钠", "少盐", "高钠", "调味品", "加工食品"],
+    "content": "减少高钠加工食品和高钠调味品、阅读食品标签，是控制钠摄入的常见做法。成年人一般参考上限为每日少于 5 克盐。",
+    "source_url": "https://www.who.int/news-room/fact-sheets/detail/sodium-reduction",
+    "source_organization": "World Health Organization",
+    "updated_at": "2026-05-11",
+    "scope": "一般人群减钠信息；肾病等特殊情况需要专业指导。"
+  },
+  {
+    "document_id": "cdc-water-healthier-drinks-2026",
+    "title": "CDC About Water and Healthier Drinks",
+    "topics": ["饮水", "喝水", "补水", "水分", "含糖饮料", "脱水"],
+    "content": "每日水分需要会随年龄、活动量、环境和个人情况变化；白水可计入每日总水分，用白水替代含糖饮料可以减少额外热量。",
+    "source_url": "https://www.cdc.gov/healthy-weight-growth/water-healthy-drinks/index.html",
+    "source_organization": "Centers for Disease Control and Prevention",
+    "updated_at": "2026-03-05",
+    "scope": "一般饮水习惯信息，不给出适用于所有人的固定饮水处方。"
+  },
+  {
+    "document_id": "cdc-sleep-2024",
+    "title": "CDC About Sleep",
+    "topics": ["睡眠", "睡多久", "睡觉", "熬夜", "睡眠质量", "成年人睡眠"],
+    "content": "睡眠需要随年龄变化。18 至 60 岁成年人一般可参考每天至少 7 小时，同时也要关注睡眠质量。长期睡眠困难应咨询专业人员。",
+    "source_url": "https://www.cdc.gov/sleep/about/index.html",
+    "source_organization": "Centers for Disease Control and Prevention",
+    "updated_at": "2024-05-15",
+    "scope": "一般睡眠教育信息，不用于诊断睡眠障碍。"
+  }
+]

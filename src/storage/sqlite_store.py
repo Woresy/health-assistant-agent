@@ -34,7 +34,7 @@ from src.storage.jsonl_store import (
 )
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class SQLiteStoreError(Exception):
@@ -97,6 +97,14 @@ class SQLiteDatabase:
                     );
                     CREATE INDEX IF NOT EXISTS idx_health_goals_user
                         ON health_goals(user_id);
+                    CREATE TABLE IF NOT EXISTS user_memories (
+                        memory_id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        memory_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_user_memories_user
+                        ON user_memories(user_id);
                     CREATE TABLE IF NOT EXISTS reminders (
                         reminder_id TEXT PRIMARY KEY,
                         user_id TEXT NOT NULL,
@@ -146,6 +154,7 @@ class SQLiteDatabase:
                     "health_events",
                     "user_profiles",
                     "health_goals",
+                    "user_memories",
                     "reminders",
                     "conversation_sessions",
                 )
@@ -342,6 +351,10 @@ class SQLiteHealthOSStore(HealthOSStore):
             json.loads(row["goal_json"])
             for row in connection.execute("SELECT goal_json FROM health_goals ORDER BY rowid")
         ]
+        memories = [
+            json.loads(row["memory_json"])
+            for row in connection.execute("SELECT memory_json FROM user_memories ORDER BY rowid")
+        ]
         reminders = [
             json.loads(row["reminder_json"])
             for row in connection.execute("SELECT reminder_json FROM reminders ORDER BY rowid")
@@ -356,6 +369,7 @@ class SQLiteHealthOSStore(HealthOSStore):
             {
                 "profiles": profiles,
                 "goals": goals,
+                "memories": memories,
                 "reminders": reminders,
                 "idempotency_results": idempotency,
             }
@@ -372,6 +386,7 @@ class SQLiteHealthOSStore(HealthOSStore):
     def _write_connection(connection: sqlite3.Connection, state: HealthOSState) -> None:
         connection.execute("DELETE FROM user_profiles")
         connection.execute("DELETE FROM health_goals")
+        connection.execute("DELETE FROM user_memories")
         connection.execute("DELETE FROM reminders")
         connection.execute("DELETE FROM idempotency_results")
         connection.executemany(
@@ -391,6 +406,18 @@ class SQLiteHealthOSStore(HealthOSStore):
                     goal.current.created_at.isoformat(),
                 )
                 for goal in state.goals
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO user_memories(memory_id, user_id, memory_json, updated_at) VALUES (?,?,?,?)",
+            [
+                (
+                    str(memory.memory_id),
+                    memory.user_id,
+                    memory.model_dump_json(),
+                    memory.updated_at.isoformat(),
+                )
+                for memory in state.memories
             ],
         )
         connection.executemany(
@@ -539,7 +566,7 @@ def migrate_legacy_storage(
             if healthos_path.exists() and not already_imported("healthos_state", healthos_path):
                 state = HealthOSStore(healthos_path).read()
                 SQLiteHealthOSStore._write_connection(connection, state)
-                count = len(state.profiles) + len(state.goals) + len(state.reminders)
+                count = len(state.profiles) + len(state.goals) + len(state.memories) + len(state.reminders)
                 imported["healthos_entities"] = count
                 connection.execute(
                     "INSERT OR REPLACE INTO legacy_imports VALUES (?,?,?,?)",

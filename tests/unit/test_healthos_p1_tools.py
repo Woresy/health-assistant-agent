@@ -176,6 +176,80 @@ def test_reminder_lifecycle_requires_confirmation(router: HealthToolRouter) -> N
     assert len(final["transitions"]) == 2
 
 
+def test_reminder_intent_only_exposes_reminder_tools(router: HealthToolRouter) -> None:
+    definitions = router.tool_definitions_for(
+        "两分钟后通过飞书提醒我喝水"
+    )
+
+    assert {
+        item["function"]["name"]
+        for item in definitions
+    } == {
+        "create_reminder_draft",
+        "list_or_cancel_reminders",
+    }
+
+
+def test_feishu_reminder_draft_discloses_destination_before_confirmation(
+    router: HealthToolRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FEISHU_REMINDER_ENABLED", "true")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/example",
+    )
+    monkeypatch.setenv("FEISHU_DESTINATION_LABEL", "飞书群「我的健康」")
+
+    draft = dispatch(
+        router,
+        "create_reminder_draft",
+        {
+            "content": "起来喝水",
+            "scheduled_for": "2099-09-05T21:00:00+08:00",
+            "delivery_channel": "feishu",
+        },
+        "feishu-reminder",
+    )
+
+    assert draft.result["data"]["preview"]["destination_label"] == "飞书群「我的健康」"
+    assert dispatch(router, "list_or_cancel_reminders", {"action": "list"}).result["data"]["count"] == 0
+    router.confirm(pending_from(draft, "create_reminder_draft"))
+    saved = dispatch(router, "list_or_cancel_reminders", {"action": "list"}).result["data"]["reminders"][0]
+    assert saved["delivery_channel"] == "feishu"
+    assert saved["destination_label"] == "飞书群「我的健康」"
+
+
+def test_active_check_in_is_off_until_confirmed_and_reuses_reminder_tool(
+    router: HealthToolRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FEISHU_REMINDER_ENABLED", "true")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/example",
+    )
+    draft = dispatch(
+        router,
+        "create_reminder_draft",
+        {
+            "content": "主动健康 check-in",
+            "scheduled_for": "2099-09-05T21:00:00+08:00",
+            "delivery_channel": "feishu",
+            "reminder_type": "check_in",
+            "recurrence": "daily",
+            "check_in_focus": ["meal", "water", "exercise"],
+        },
+        "active-check-in",
+    )
+
+    assert draft.result["ok"] is True
+    assert dispatch(router, "list_or_cancel_reminders", {"action": "list"}).result["data"]["count"] == 0
+    router.confirm(pending_from(draft, "create_reminder_draft"))
+    saved = dispatch(router, "list_or_cancel_reminders", {"action": "list"}).result["data"]["reminders"][0]
+    assert saved["reminder_type"] == "check_in"
+    assert saved["recurrence"] == "daily"
+    assert saved["check_in_focus"] == ["meal", "water", "exercise"]
+
+
 @pytest.mark.parametrize(
     ("question", "error_code"),
     [

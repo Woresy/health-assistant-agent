@@ -18,6 +18,9 @@ from src.healthos.models import (
     ReminderTransition,
     UserProfile,
 )
+from src.healthos.memory_control import sync_profile_memories
+from src.knowledge.repository import HealthKnowledgeRepository
+from src.automation.feishu import FeishuWebhookConfig
 from src.nutrition.calculator import NutritionCalculationError, calculate_nutrition as calculate_food
 from src.nutrition.repository import FoodRepository, NutritionDataError
 from src.storage.healthos_store import HealthOSStore, HealthOSStoreError
@@ -342,30 +345,6 @@ def calculate_nutrition(
     )
 
 
-_KNOWLEDGE = (
-    {
-        "document_id": "who-physical-activity-2024",
-        "title": "WHO Physical activity fact sheet",
-        "topics": ("运动", "活动", "久坐", "锻炼", "exercise", "physical activity"),
-        "content": "成年人可把每周至少 150 分钟中等强度活动作为一般参考，并根据自身情况循序渐进。",
-        "source_url": "https://www.who.int/news-room/fact-sheets/detail/physical-activity",
-        "updated_at": "2024-06-26",
-    },
-    {
-        "document_id": "who-healthy-diet-2026",
-        "title": "WHO Healthy diet fact sheet",
-        "topics": ("饮食", "蔬菜", "水果", "全谷物", "盐", "糖", "healthy diet"),
-        "content": "一般健康饮食强调充足、平衡、适度和多样，优先选择多样化且少加工的食物。",
-        "source_url": "https://www.who.int/news-room/fact-sheets/detail/healthy-diet",
-        "updated_at": "2026-01-26",
-    },
-)
-
-_URGENT_TERMS = ("胸痛", "呼吸困难", "晕厥", "昏倒", "自杀", "自伤", "急救", "emergency")
-_MEDICAL_TERMS = ("诊断", "药", "用药", "剂量", "处方", "怀孕", "孕妇", "未成年人", "进食障碍")
-_INJECTION_TERMS = ("忽略之前", "忽略系统", "system prompt", "developer message", "越过规则")
-
-
 def retrieve_health_knowledge(*, question: str, top_k: int = 3) -> dict[str, Any]:
     """检索可信一般健康知识，并在高风险场景拒答。"""
 
@@ -374,25 +353,22 @@ def retrieve_health_knowledge(*, question: str, top_k: int = 3) -> dict[str, Any
         return _failure("QUESTION_REQUIRED", "健康问题不能为空")
     if len(normalized) > 500:
         return _failure("QUESTION_TOO_LONG", "健康问题不得超过 500 个字符")
-    if any(term in normalized for term in _INJECTION_TERMS):
-        return _failure("PROMPT_INJECTION_DETECTED", "问题包含试图改变安全规则的内容，未执行检索")
-    if any(term in normalized for term in _URGENT_TERMS):
+    repository = HealthKnowledgeRepository()
+    safety_code = repository.classify_safety(normalized)
+    if safety_code == "PROMPT_INJECTION_DETECTED":
+        return _failure(safety_code, "问题包含试图改变安全规则的内容，未执行检索")
+    if safety_code == "URGENT_HELP_REQUIRED":
         return _failure("URGENT_HELP_REQUIRED", "这可能涉及紧急健康风险，请立即联系当地急救服务或合格专业人员")
-    if any(term in normalized for term in _MEDICAL_TERMS):
+    if safety_code == "MEDICAL_BOUNDARY":
         return _failure("MEDICAL_BOUNDARY", "我不能提供诊断或用药建议，请咨询合格医疗专业人员")
-    matches = []
-    for document in _KNOWLEDGE:
-        score = sum(1 for term in document["topics"] if term.casefold() in normalized)
-        if score:
-            matches.append({**document, "score": score})
-    matches.sort(key=lambda item: (-item["score"], item["document_id"]))
+    matches = repository.search(normalized, top_k=top_k)
     if not matches:
         return _failure("KNOWLEDGE_NOT_FOUND", "当前可信知识库没有足够证据回答这个问题")
     return _ok(
         {
             "answer_scope": "一般健康生活信息，不是医疗建议",
-            "citations": matches[:top_k],
-            "count": min(len(matches), top_k),
+            "citations": matches,
+            "count": len(matches),
         }
     )
 
@@ -542,10 +518,41 @@ def get_period_summary(
 def create_reminder_draft(
     *, user_id: str, content: str, scheduled_for: str, timezone_name: str,
     idempotency_key: str, store: HealthOSStore,
+    delivery_channel: str = "local",
+    reminder_type: str = "standard",
+    recurrence: str = "once",
+    check_in_focus: list[str] | None = None,
 ) -> dict[str, Any]:
-    """生成本地提醒草稿，不立即安排。"""
+    """生成本地或飞书提醒草稿，不立即安排或发送。"""
 
     try:
+        normalized_channel = delivery_channel.strip().lower()
+        if normalized_channel not in {"local", "feishu"}:
+            return _failure("REMINDER_CHANNEL_INVALID", "提醒渠道只能选择本地或飞书")
+        normalized_type = reminder_type.strip().lower()
+        normalized_recurrence = recurrence.strip().lower()
+        if normalized_type not in {"standard", "check_in"}:
+            return _failure("REMINDER_TYPE_INVALID", "提醒类型只能是普通提醒或主动 check-in")
+        if normalized_recurrence not in {"once", "daily", "weekdays"}:
+            return _failure("REMINDER_RECURRENCE_INVALID", "提醒频率只能是单次、每天或工作日")
+        if normalized_type == "check_in" and normalized_channel != "feishu":
+            return _failure("CHECK_IN_CHANNEL_INVALID", "主动 check-in 需要选择飞书接收位置")
+        if normalized_type == "check_in" and normalized_recurrence == "once":
+            return _failure("CHECK_IN_RECURRENCE_INVALID", "主动 check-in 需要选择每天或工作日")
+        normalized_focus = list(dict.fromkeys(check_in_focus or ["meal", "water", "exercise"]))
+        if any(item not in {"meal", "water", "exercise", "weight"} for item in normalized_focus):
+            return _failure("CHECK_IN_FOCUS_INVALID", "主动 check-in 只能关注饮食、饮水、运动或体重")
+        destination_label = "本地提醒中心"
+        destination_key = "local"
+        if normalized_channel == "feishu":
+            feishu_config = FeishuWebhookConfig.from_environment()
+            if not feishu_config.available:
+                return _failure(
+                    "REMINDER_PROVIDER_UNAVAILABLE",
+                    "飞书机器人尚未配置，请先在本机环境变量中启用并填写 Webhook",
+                )
+            destination_label = feishu_config.destination_label
+            destination_key = feishu_config.destination_key
         profile = store.get_profile(user_id, timezone_name)
         if not profile.reminders_enabled:
             return _failure("REMINDERS_DISABLED", "提醒已关闭，请先在档案中开启")
@@ -560,6 +567,12 @@ def create_reminder_draft(
         "content": content.strip(),
         "scheduled_for": scheduled.isoformat(),
         "timezone_name": profile.timezone_name,
+        "delivery_channel": normalized_channel,
+        "reminder_type": normalized_type,
+        "recurrence": normalized_recurrence,
+        "check_in_focus": normalized_focus if normalized_type == "check_in" else [],
+        "destination_label": destination_label,
+        "destination_key": destination_key,
     }
     if not payload["content"] or len(payload["content"]) > 300:
         return _failure("REMINDER_CONTENT_INVALID", "提醒内容必须为 1—300 个字符")
@@ -598,6 +611,7 @@ def _execute_healthos_draft(
                 if current_version != int(payload["before_version"]):
                     raise ValueError("档案已被更新，请重新生成草稿")
                 state.profiles[user_id] = proposed
+                sync_profile_memories(state, proposed)
                 result = {"action": action, "profile": proposed.model_dump(mode="json")}
             elif action == "goal_change":
                 goal_id = UUID(payload["goal_id"])
@@ -620,6 +634,12 @@ def _execute_healthos_draft(
                     content=payload["content"],
                     scheduled_for=scheduled,
                     timezone_name=payload["timezone_name"],
+                    delivery_channel=payload.get("delivery_channel", "local"),
+                    reminder_type=payload.get("reminder_type", "standard"),
+                    recurrence=payload.get("recurrence", "once"),
+                    check_in_focus=payload.get("check_in_focus", []),
+                    destination_label=payload.get("destination_label", "本地提醒中心"),
+                    destination_key=payload.get("destination_key", "local"),
                     status=ReminderStatus.SCHEDULED,
                     created_at=now,
                     updated_at=now,

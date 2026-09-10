@@ -22,6 +22,9 @@ from src.nutrition.repository import (
 )
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
 CaseType = Literal[
     "standard_name",
     "alias",
@@ -310,6 +313,11 @@ def evaluate_retrieval(
         and degraded_case_count > 0
     )
 
+    try:
+        report_index_dir = str(repository.index_dir.resolve().relative_to(PROJECT_ROOT))
+    except ValueError:
+        report_index_dir = repository.index_dir.name
+
     return {
         "retrieval_mode": (
             repository.rag_mode
@@ -320,9 +328,7 @@ def evaluate_retrieval(
         "dataset_record_count": (
             repository.record_count
         ),
-        "index_dir": str(
-            repository.index_dir
-        ),
+        "index_dir": report_index_dir,
         "case_count": len(cases),
         "expected_case_count": len(
             expected_cases

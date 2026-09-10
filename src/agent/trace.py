@@ -18,6 +18,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Literal, Protocol
 
+from langsmith import traceable
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -42,8 +43,12 @@ PROJECT_ROOT = (
 
 DEFAULT_AGENT_TRACE_PATH = (
     PROJECT_ROOT
-    / "data"
-    / "agent_traces.jsonl"
+    / Path(
+        os.getenv(
+            "AGENT_TRACE_PATH",
+            "data/agent_traces.jsonl",
+        ).strip()
+    )
 )
 
 TraceAction = Literal[
@@ -69,6 +74,28 @@ def _utc_now() -> datetime:
     return datetime.now(
         timezone.utc
     )
+
+
+def _langsmith_safe_inputs(_: dict[str, object]) -> dict[str, object]:
+    """远程 Trace 永不包含会话对象或用户健康文本。"""
+
+    return {"privacy": "redacted", "input_present": True}
+
+
+def _langsmith_safe_output(result: object) -> dict[str, object]:
+    """仅输出可观测状态，不上传模型回答或健康参数。"""
+
+    if not isinstance(result, AgentRunResult):
+        return {"privacy": "redacted", "result": "unknown"}
+    return {
+        "privacy": "redacted",
+        "state": result.state.value,
+        "finish_reason": result.finish_reason.value,
+        "model_rounds": result.model_rounds,
+        "tool_names": [step.tool_name for step in result.tool_steps],
+        "has_pending_task": result.pending_task is not None,
+        "has_pending_confirmation": result.pending_confirmation is not None,
+    }
 
 
 class AgentTraceWriteError(
@@ -554,6 +581,14 @@ class TracedConversationSession(
             self._last_trace_warning
         )
 
+    @traceable(
+        name="HealthOS Conversation Turn",
+        run_type="chain",
+        tags=["healthos", "conversation"],
+        metadata={"privacy": "redacted"},
+        process_inputs=_langsmith_safe_inputs,
+        process_outputs=_langsmith_safe_output,
+    )
     def send(
         self,
         user_text: str,
@@ -594,6 +629,14 @@ class TracedConversationSession(
 
         return result
 
+    @traceable(
+        name="HealthOS Confirmation",
+        run_type="tool",
+        tags=["healthos", "human-approval"],
+        metadata={"privacy": "redacted"},
+        process_inputs=_langsmith_safe_inputs,
+        process_outputs=_langsmith_safe_output,
+    )
     def confirm(
         self,
     ) -> AgentRunResult:
@@ -640,6 +683,14 @@ class TracedConversationSession(
 
         return result
 
+    @traceable(
+        name="HealthOS Cancellation",
+        run_type="tool",
+        tags=["healthos", "human-approval"],
+        metadata={"privacy": "redacted"},
+        process_inputs=_langsmith_safe_inputs,
+        process_outputs=_langsmith_safe_output,
+    )
     def cancel(
         self,
     ) -> AgentRunResult:

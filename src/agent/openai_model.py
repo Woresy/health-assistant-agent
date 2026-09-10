@@ -28,6 +28,7 @@ from src.agent.models import (
     AgentModelReply,
     ModelToolCall,
 )
+from src.observability.langsmith import wrap_openai_client
 
 
 PROJECT_ROOT = (
@@ -38,6 +39,9 @@ DEFAULT_ENV_FILE = (
     PROJECT_ROOT
     / ".env"
 )
+
+DEFAULT_AGENT_TARGET_RESPONSE_SECONDS = 15.0
+DEFAULT_AGENT_REQUEST_TIMEOUT_SECONDS = 60.0
 
 
 class AgentConfigurationError(
@@ -65,9 +69,11 @@ class AgentProviderSettings:
     api_key: str
     base_url: str
     model: str
+    target_response_seconds: float
     timeout: float
     max_retries: int
     max_tokens: int
+    thinking_mode: str
 
 
 def _parse_positive_float(
@@ -232,23 +238,42 @@ def load_agent_settings(
         )
     )
 
+    target_response_seconds = (
+        _parse_positive_float(
+            value=os.getenv(
+                "AGENT_TARGET_RESPONSE_SECONDS",
+                str(DEFAULT_AGENT_TARGET_RESPONSE_SECONDS),
+            ),
+            field_name=(
+                "AGENT_TARGET_RESPONSE_SECONDS"
+            ),
+            maximum=60,
+        )
+    )
+
     timeout = (
         _parse_positive_float(
             value=os.getenv(
                 "AGENT_REQUEST_TIMEOUT",
-                "30",
+                str(DEFAULT_AGENT_REQUEST_TIMEOUT_SECONDS),
             ),
             field_name=(
                 "AGENT_REQUEST_TIMEOUT"
             ),
-            maximum=300,
+            maximum=60,
         )
     )
+
+    if target_response_seconds > timeout:
+        raise AgentConfigurationError(
+            "AGENT_TARGET_RESPONSE_SECONDS "
+            "不能大于 AGENT_REQUEST_TIMEOUT"
+        )
 
     max_retries = _parse_integer(
         value=os.getenv(
             "AGENT_MAX_RETRIES",
-            "2",
+            "0",
         ),
         field_name=(
             "AGENT_MAX_RETRIES"
@@ -256,6 +281,11 @@ def load_agent_settings(
         minimum=0,
         maximum=10,
     )
+    if max_retries != 0:
+        raise AgentConfigurationError(
+            "AGENT_MAX_RETRIES 必须为 0；"
+            "否则 SDK 重试会放大 60 秒硬超时"
+        )
 
     max_tokens = _parse_integer(
         value=os.getenv(
@@ -269,13 +299,31 @@ def load_agent_settings(
         maximum=8192,
     )
 
+    thinking_mode = os.getenv(
+        "AGENT_THINKING_MODE",
+        "auto",
+    ).strip().lower()
+    if thinking_mode not in {
+        "auto",
+        "enabled",
+        "disabled",
+    }:
+        raise AgentConfigurationError(
+            "AGENT_THINKING_MODE 只能是 "
+            "auto、enabled 或 disabled"
+        )
+
     return AgentProviderSettings(
         api_key=api_key,
         base_url=base_url,
         model=model,
+        target_response_seconds=(
+            target_response_seconds
+        ),
         timeout=timeout,
         max_retries=max_retries,
         max_tokens=max_tokens,
+        thinking_mode=thinking_mode,
     )
 
 
@@ -386,6 +434,7 @@ class OpenAICompatibleAgentModel:
         client: Any,
         model: str,
         max_tokens: int = 1024,
+        thinking_mode: str = "auto",
     ) -> None:
         normalized_model = (
             model.strip()
@@ -401,6 +450,16 @@ class OpenAICompatibleAgentModel:
                 "max_tokens 必须大于 0"
             )
 
+        normalized_thinking_mode = thinking_mode.strip().lower()
+        if normalized_thinking_mode not in {
+            "auto",
+            "enabled",
+            "disabled",
+        }:
+            raise ValueError(
+                "thinking_mode 只能是 auto、enabled 或 disabled"
+            )
+
         self._client = client
         self._model = (
             normalized_model
@@ -408,6 +467,7 @@ class OpenAICompatibleAgentModel:
         self._max_tokens = (
             max_tokens
         )
+        self._thinking_mode = normalized_thinking_mode
 
     def complete(
         self,
@@ -428,23 +488,24 @@ class OpenAICompatibleAgentModel:
         ]
 
         try:
+            request_options: dict[str, Any] = {
+                "model": self._model,
+                "messages": provider_messages,
+                "tools": list(tool_definitions),
+                "tool_choice": "auto",
+                "max_tokens": self._max_tokens,
+            }
+            if self._thinking_mode != "auto":
+                request_options["extra_body"] = {
+                    "thinking": {
+                        "type": self._thinking_mode,
+                    }
+                }
             response = (
                 self._client
                 .chat
                 .completions
-                .create(
-                    model=self._model,
-                    messages=(
-                        provider_messages
-                    ),
-                    tools=list(
-                        tool_definitions
-                    ),
-                    tool_choice="auto",
-                    max_tokens=(
-                        self._max_tokens
-                    ),
-                )
+                .create(**request_options)
             )
         except APITimeoutError as exc:
             raise AgentProviderError(
@@ -666,6 +727,10 @@ def create_agent_model_from_environment(
             settings.max_retries
         ),
     )
+    client = wrap_openai_client(
+        client,
+        model=settings.model,
+    )
 
     model = (
         OpenAICompatibleAgentModel(
@@ -674,6 +739,9 @@ def create_agent_model_from_environment(
             max_tokens=(
                 settings.max_tokens
             ),
+            thinking_mode=(
+                settings.thinking_mode
+            ),
         )
     )
 
@@ -681,5 +749,7 @@ def create_agent_model_from_environment(
         model,
         "Agent 模型已启用："
         f"{settings.model}；"
-        f"Provider：{settings.base_url}",
+        f"Provider：{settings.base_url}；"
+        f"常规响应目标 {settings.target_response_seconds:g}s；"
+        f"单次请求硬上限 {settings.timeout:g}s",
     )

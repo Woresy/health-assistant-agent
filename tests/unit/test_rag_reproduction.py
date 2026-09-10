@@ -13,6 +13,7 @@ from scripts.build_food_index import (
 from scripts.reproduce_rag import (
     RagReproductionError,
     download_embedding_model,
+    portable_path,
 )
 
 
@@ -122,3 +123,10 @@ def test_shell_entrypoint_is_executable() -> None:
     )
     assert entrypoint.is_file()
     assert os.access(entrypoint, os.X_OK)
+
+
+def test_report_paths_are_portable(tmp_path: Path) -> None:
+    """复现摘要不得记录开发机绝对目录。"""
+
+    assert portable_path(PROJECT_ROOT / "data" / "index") == "data/index"
+    assert portable_path(tmp_path / "eval.json") == "eval.json"

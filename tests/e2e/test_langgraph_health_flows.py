@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from src.agent.langgraph_runner import LangGraphAgentRunner
 from src.agent.models import (
     AgentMessage,
@@ -16,6 +18,7 @@ from src.agent.runner import ConversationSession
 from src.agent.tool_router import HealthToolRouter
 from src.agent.trace import AgentTraceStore, TracedConversationSession
 from src.storage.jsonl_store import HealthEventStore
+from src.storage.healthos_store import HealthOSStore
 
 
 class FakeAgentModel:
@@ -305,3 +308,63 @@ def test_langgraph_confirmation_failure_interrupts_again_for_retry(
     confirmed = session.confirm()
     assert confirmed.state.value == "completed"
     assert len(store.read_all()) == 1
+
+
+def test_relative_reminder_does_not_wait_for_model(tmp_path: Path) -> None:
+    event_store = HealthEventStore(tmp_path / "health_events.jsonl")
+    router = HealthToolRouter(
+        event_store,
+        healthos_store=HealthOSStore(tmp_path / "healthos.json"),
+    )
+    model = FakeAgentModel([])
+    runner = LangGraphAgentRunner(model=model, router=router)
+    session = ConversationSession(
+        runner=runner,
+        session_id="direct-reminder",
+        user_id="user-1",
+    )
+
+    prepared = session.send("两分钟后提醒我喝水")
+
+    assert prepared.model_rounds == 0
+    assert prepared.pending_confirmation is not None
+    assert model.received_messages == []
+    confirmed = session.confirm()
+    assert confirmed.answer == "提醒已确认安排。"
+
+
+def test_active_check_in_does_not_wait_for_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FEISHU_REMINDER_ENABLED", "true")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/example",
+    )
+    healthos_store = HealthOSStore(tmp_path / "healthos.json")
+    router = HealthToolRouter(
+        HealthEventStore(tmp_path / "health_events.jsonl"),
+        healthos_store=healthos_store,
+    )
+    model = FakeAgentModel([])
+    session = ConversationSession(
+        runner=LangGraphAgentRunner(model=model, router=router),
+        session_id="direct-active-check-in",
+        user_id="user-1",
+    )
+
+    prepared = session.send(
+        "我想每天晚上 9 点通过飞书主动 check-in，关注饮食、饮水和运动"
+    )
+
+    assert prepared.model_rounds == 0
+    assert prepared.pending_confirmation is not None
+    assert "目前还没有启用" in prepared.answer
+    assert healthos_store.read().reminders == []
+    session.confirm()
+    reminder = healthos_store.read().reminders[0]
+    assert reminder.reminder_type == "check_in"
+    assert reminder.recurrence == "daily"
+    assert reminder.check_in_focus == ["meal", "water", "exercise"]
+    assert model.received_messages == []

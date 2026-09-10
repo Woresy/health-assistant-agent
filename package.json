@@ -1,0 +1,10 @@
+{
+  "name": "health-assistant-agent-browser-tests",
+  "private": true,
+  "scripts": {
+    "test:browser": "node --test --test-timeout=180000 tests/browser/*.test.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.59.1"
+  }
+}

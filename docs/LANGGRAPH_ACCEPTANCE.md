@@ -8,7 +8,7 @@
 在仓库根目录执行：
 
 ```bash
-cd /home/woresy/ai-project-practice/health-assistant-agent
+# 先进入克隆后的仓库根目录
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env

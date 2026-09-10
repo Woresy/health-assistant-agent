@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -32,6 +33,7 @@ from src.agent.models import (
     SessionState,
 )
 from src.agent.runner import (
+    AgentRunner,
     SYSTEM_PROMPT,
     TOOL_REQUIRED_RETRY_PROMPT,
     _preview_answer,
@@ -39,6 +41,7 @@ from src.agent.runner import (
     _requires_health_tool,
     _tool_request_message,
     _tool_result_message,
+    _try_direct_relative_reminder,
 )
 from src.agent.tool_router import HealthToolRouter
 
@@ -317,9 +320,16 @@ class LangGraphAgentRunner:
                 role="system",
                 content=prompt_context.render_system_message(),
             )
+        pending_state = state.get("pending_task")
+        pending_tool_name = None
+        if isinstance(pending_state, dict):
+            pending_tool_name = str(pending_state.get("tool_name", "")) or None
         reply = self._model.complete(
             messages,
-            self._router.tool_definitions,
+            self._router.tool_definitions_for(
+                state.get("user_text", ""),
+                pending_tool_name=pending_tool_name,
+            ),
         )
 
         if not reply.tool_calls:
@@ -748,8 +758,20 @@ class LangGraphAgentRunner:
         }
 
     @staticmethod
-    def _config(session_id: str) -> dict[str, dict[str, str]]:
-        return {"configurable": {"thread_id": session_id}}
+    def _config(session_id: str) -> dict[str, Any]:
+        external_thread_id = hashlib.sha256(
+            f"healthos-langsmith:{session_id}".encode("utf-8")
+        ).hexdigest()[:32]
+        return {
+            "configurable": {"thread_id": session_id},
+            "tags": ["healthos", "langgraph", "gradio"],
+            "metadata": {
+                "thread_id": external_thread_id,
+                "orchestrator": "langgraph",
+                "application": "health-assistant-agent",
+                "privacy": "inputs-outputs-hidden-by-default",
+            },
+        }
 
     def create_session_state(
         self,
@@ -862,6 +884,14 @@ class LangGraphAgentRunner:
             )
             return AgentTurnOutcome(result=result, session_state=session_state)
 
+        direct_reminder = _try_direct_relative_reminder(
+            session_state=session_state,
+            user_text=normalized_text,
+            router=self._router,
+        )
+        if direct_reminder is not None:
+            return direct_reminder
+
         config = self._config(session_state.session_id)
         if session_state.pending_task is not None:
             self._graph.invoke(
@@ -910,6 +940,10 @@ class LangGraphAgentRunner:
             )
             return AgentTurnOutcome(result=result, session_state=session_state)
 
+        checkpoint = self._current_graph_state(session_state.session_id)
+        if checkpoint.get("pending_confirmation") is None:
+            return AgentRunner.confirm_pending(self, session_state)
+
         self._graph.invoke(
             Command(resume={"action": "confirm"}),
             config=self._config(session_state.session_id),
@@ -920,6 +954,13 @@ class LangGraphAgentRunner:
         self,
         session_state: SessionState,
     ) -> AgentTurnOutcome:
+        checkpoint = self._current_graph_state(session_state.session_id)
+        if (
+            session_state.pending_confirmation is not None
+            and checkpoint.get("pending_confirmation") is None
+        ):
+            return AgentRunner.cancel_pending(self, session_state)
+
         if (
             session_state.pending_task is not None
             or session_state.pending_confirmation is not None

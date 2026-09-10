@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from src.nutrition.repository import FoodRepository
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CASES_PATH = PROJECT_ROOT / "tests" / "eval" / "nutrition_retrieval.jsonl"
 SAMPLE_PATH = PROJECT_ROOT / "data" / "samples" / "foods_sample.json"
+CANONICAL_REPORT_PATH = PROJECT_ROOT / "docs" / "eval_report.json"
 
 
 def test_fixed_evaluation_set_shape_and_thresholds() -> None:
@@ -44,3 +46,17 @@ def test_fixed_evaluation_set_shape_and_thresholds() -> None:
     assert report["recall_at_3"] >= 0.85
     assert report["rejection_accuracy"] == 1.0
     assert report["passed"] is True
+
+
+def test_only_canonical_portable_rag_report_is_committed() -> None:
+    """权威报告必须唯一且不泄漏开发机绝对路径。"""
+
+    report = json.loads(CANONICAL_REPORT_PATH.read_text(encoding="utf-8"))
+    report_text = CANONICAL_REPORT_PATH.read_text(encoding="utf-8")
+
+    assert report["passed"] is True
+    assert report["index_dir"] == "data/index"
+    assert "/home/" not in report_text
+    assert "\\\\Users\\" not in report_text
+    assert not (PROJECT_ROOT / "docs" / "eval_hybrid.json").exists()
+    assert not (PROJECT_ROOT / "docs" / "eval_lexical.json").exists()

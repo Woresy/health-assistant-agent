@@ -113,3 +113,10 @@ class HealthOSStore:
             if reminder.user_id == user_id and reminder.reminder_id == reminder_id:
                 return index
         raise ValueError("提醒不存在或已删除")
+
+    @staticmethod
+    def find_memory_index(state: HealthOSState, user_id: str, memory_id: UUID) -> int:
+        for index, memory in enumerate(state.memories):
+            if memory.user_id == user_id and memory.memory_id == memory_id:
+                return index
+        raise ValueError("这条记忆不存在或已删除")

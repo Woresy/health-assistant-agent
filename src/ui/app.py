@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from functools import partial
 from html import escape
@@ -15,6 +17,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import gradio as gr
 from dotenv import load_dotenv
 
+from src.automation.feishu import FeishuWebhookConfig, FeishuWebhookNotifier
+from src.automation.reminder_scheduler import ReminderScheduler
 from src.agent.models import (
     AgentRunResult,
     PendingConfirmation,
@@ -40,12 +44,19 @@ from src.agent.trace import (
     DEFAULT_AGENT_TRACE_PATH,
     TracedConversationSession,
 )
+from src.observability.langsmith import configure_langsmith
 from src.health.models import (
     ExercisePayload,
     HealthEvent,
     MealPayload,
     WaterPayload,
     WeightPayload,
+)
+from src.healthos.memory_control import (
+    clear_user_memories,
+    delete_user_memory,
+    export_user_memories,
+    list_user_memories,
 )
 from src.nutrition.calculator import (
     NutritionCalculationError,
@@ -226,6 +237,8 @@ load_dotenv(
     override=False,
 )
 
+LANGSMITH_STATUS = configure_langsmith()
+
 EVENTS_PATH = (
     PROJECT_ROOT
     / "data"
@@ -290,6 +303,25 @@ elif STORAGE_BACKEND == "json":
 else:
     raise RuntimeError("STORAGE_BACKEND 只能是 sqlite 或 json")
 
+FEISHU_CONFIG = FeishuWebhookConfig.from_environment()
+if FEISHU_CONFIG.available:
+    try:
+        reminder_poll_seconds = float(os.getenv("REMINDER_POLL_SECONDS", "30"))
+    except ValueError:
+        reminder_poll_seconds = 30.0
+    reminder_scheduler: ReminderScheduler | None = ReminderScheduler(
+        store=healthos_store,
+        notifier=FeishuWebhookNotifier(FEISHU_CONFIG),
+        event_store=event_store,
+        poll_seconds=reminder_poll_seconds,
+    )
+    REMINDER_AUTOMATION_STATUS = (
+        f"飞书自动发送已启用，目标：{FEISHU_CONFIG.destination_label}"
+    )
+else:
+    reminder_scheduler = None
+    REMINDER_AUTOMATION_STATUS = "飞书自动发送未配置；本地提醒仍可正常使用"
+
 tool_router = HealthToolRouter(
     event_store,
     healthos_store=healthos_store,
@@ -317,7 +349,8 @@ try:
 
     AGENT_PROVIDER_STATUS = (
         f"{AGENT_PROVIDER_STATUS.rstrip('。；;')}；"
-        f"编排器：{AGENT_ORCHESTRATOR}"
+        f"编排器：{AGENT_ORCHESTRATOR}；"
+        f"{LANGSMITH_STATUS.message}"
     )
 except AgentConfigurationError as exc:
     agent_model = None
@@ -779,15 +812,25 @@ def _pending_confirmation_content(
     elif action == "reminder_create":
         preview = data.get("preview", {})
         label = "提醒"
-        title = "确认安排提醒"
+        is_check_in = preview.get("reminder_type") == "check_in"
+        title = "确认启用主动 check-in" if is_check_in else "确认安排提醒"
+        destination = str(preview.get("destination_label", "本地提醒中心"))
+        recurrence = {
+            "daily": "每天",
+            "weekdays": "工作日",
+        }.get(str(preview.get("recurrence", "once")), "单次")
         summary_html = (
             '<div class="confirmation-summary">'
-            f"<strong>{escape(str(preview.get('content', '健康提醒')))}</strong>"
-            f"<span>{escape(str(preview.get('scheduled_for', '')))} · "
-            f"{escape(str(preview.get('timezone_name', APP_TIMEZONE)))}</span>"
+            f"<strong>{'主动健康 check-in' if is_check_in else escape(str(preview.get('content', '健康提醒')))}</strong>"
+            f"<span>发送到 {escape(destination)} · "
+            f"{escape(str(preview.get('scheduled_for', '')))} · {escape(recurrence)}</span>"
             "</div>"
         )
-        consequence = "确认后在本地提醒中心创建一次；重复确认不会重复创建。"
+        consequence = (
+            "确认后才会启用；每次只根据已确认记录询问是否需要补记，不会自动写入。"
+            if is_check_in
+            else "确认后才会安排自动化任务；到期只尝试发送一次，重复确认不会重复创建。"
+        )
     else:
         preview = data.get("preview", {})
         operation = {
@@ -851,6 +894,10 @@ def _confirmation_updates(
         "reminder_create": "确认安排提醒",
         "reminder_change": "确认提醒变更",
     }[pending.action]
+    if pending.action == "reminder_create":
+        preview = pending.draft_data.get("preview", {})
+        if isinstance(preview, dict) and preview.get("reminder_type") == "check_in":
+            confirm_label = "确认启用"
 
     return (
         gr.Markdown(
@@ -1589,6 +1636,7 @@ _REMINDER_STATUS_LABELS = {
     "paused": "已暂停",
     "cancelled": "已取消",
     "failed": "执行失败",
+    "unknown": "发送结果待核实",
 }
 
 
@@ -1659,8 +1707,18 @@ def _reminder_rows(reminders: list[dict[str, Any]]) -> list[list[Any]]:
             scheduled_text = scheduled or "时间未知"
         rows.append(
             [
-                reminder.get("content", "健康提醒"),
+                (
+                    "主动健康 check-in"
+                    if reminder.get("reminder_type") == "check_in"
+                    else reminder.get("content", "健康提醒")
+                ),
                 scheduled_text,
+                {
+                    "once": "单次",
+                    "daily": "每天",
+                    "weekdays": "工作日",
+                }.get(str(reminder.get("recurrence", "once")), "单次"),
+                reminder.get("destination_label", "本地提醒中心"),
                 _REMINDER_STATUS_LABELS.get(
                     str(reminder.get("status", "")),
                     str(reminder.get("status", "")),
@@ -1763,8 +1821,117 @@ def refresh_healthos_dashboard(period_days: int = 7) -> tuple[Any, ...]:
         _goal_rows(goals),
         _checkin_markdown(period, goals),
         _reminder_rows(reminders),
-        f"已读取 {len(reminders)} 条本地提醒；取消、延后、暂停和恢复都需要确认。",
+        f"已读取 {len(reminders)} 条提醒；取消、延后、暂停和恢复都需要确认。"
+        f" {REMINDER_AUTOMATION_STATUS}。",
     )
+
+
+def refresh_memory_center() -> tuple[Any, Any, str]:
+    """读取用户可理解的长期记忆，不向表格暴露内部 ID。"""
+
+    result = list_user_memories(user_id=LOCAL_USER_ID, store=healthos_store)
+    if not result["ok"]:
+        error = result["error"]
+        return [], gr.Dropdown(choices=[], value=None), _error_text(error["error_code"], error["message"])
+    memories = result["data"]["memories"]
+    rows = [
+        [item["label"], item["content"], str(item["confirmed_at"])[:16].replace("T", " ")]
+        for item in memories
+    ]
+    choices = [
+        (f"{item['label']} · {item['content']}", item["memory_id"])
+        for item in memories
+    ]
+    status = (
+        f"已保存 {len(memories)} 条经过确认的长期记忆。"
+        if memories
+        else "目前没有长期记忆。健康记录和目标不会因为这里为空而被删除。"
+    )
+    return rows, gr.Dropdown(choices=choices, value=None), status
+
+
+def prepare_memory_delete(memory_id: str | None) -> tuple[dict[str, str], Any, Any, Any]:
+    if not memory_id:
+        return {}, gr.Markdown(value="请先选择要遗忘的内容。", visible=True), gr.Button(visible=False), gr.Button(visible=False)
+    result = list_user_memories(user_id=LOCAL_USER_ID, store=healthos_store)
+    memory = next(
+        (item for item in result.get("data", {}).get("memories", []) if item["memory_id"] == memory_id),
+        None,
+    )
+    if memory is None:
+        return {}, gr.Markdown(value="这条记忆已经不存在，请刷新后重试。", visible=True), gr.Button(visible=False), gr.Button(visible=False)
+    preview = (
+        '<section class="memory-confirmation" role="status" aria-live="polite">'
+        '<strong>确认遗忘这条内容？</strong>'
+        f'<p>{escape(memory["label"])}：{escape(memory["content"])}</p>'
+        '<small>确认后，下一轮对话不会再把这项偏好加入上下文；健康记录和目标不受影响。</small>'
+        '</section>'
+    )
+    return (
+        {"action": "delete", "memory_id": memory_id},
+        gr.Markdown(value=preview, visible=True, sanitize_html=False, container=False),
+        gr.Button(value="确认遗忘", visible=True),
+        gr.Button(visible=True),
+    )
+
+
+def prepare_memory_clear() -> tuple[dict[str, str], Any, Any, Any]:
+    preview = (
+        '<section class="memory-confirmation memory-confirmation-danger" role="alert">'
+        '<strong>确认清除全部长期记忆？</strong>'
+        '<p>教练风格、饮食偏好、忌口和提醒偏好会恢复默认。</p>'
+        '<small>健康事实、目标、提醒任务和对话历史不会被删除。</small>'
+        '</section>'
+    )
+    return (
+        {"action": "clear"},
+        gr.Markdown(value=preview, visible=True, sanitize_html=False, container=False),
+        gr.Button(value="确认全部清除", visible=True),
+        gr.Button(visible=True),
+    )
+
+
+def cancel_memory_action() -> tuple[dict[str, str], Any, Any, Any]:
+    return {}, gr.Markdown(value="", visible=False), gr.Button(visible=False), gr.Button(visible=False)
+
+
+def confirm_memory_action(action_state: dict[str, str]) -> tuple[Any, Any, str, dict[str, str], Any, Any, Any]:
+    action = action_state.get("action") if isinstance(action_state, dict) else None
+    if action == "delete":
+        result = delete_user_memory(
+            user_id=LOCAL_USER_ID,
+            memory_id=action_state.get("memory_id", ""),
+            confirmed=True,
+            store=healthos_store,
+        )
+        success = "已遗忘所选内容，下一轮对话将使用更新后的偏好。"
+    elif action == "clear":
+        result = clear_user_memories(user_id=LOCAL_USER_ID, confirmed=True, store=healthos_store)
+        success = "长期记忆已全部清除；健康记录、目标和对话历史仍然保留。"
+    else:
+        result = {"ok": False, "error": {"error_code": "MEMORY_ACTION_MISSING", "message": "没有等待确认的记忆操作"}}
+        success = ""
+    rows, selector, status = refresh_memory_center()
+    if result["ok"]:
+        status = success
+    else:
+        error = result["error"]
+        status = _error_text(error["error_code"], error["message"])
+    return rows, selector, status, {}, gr.Markdown(value="", visible=False), gr.Button(visible=False), gr.Button(visible=False)
+
+
+def export_memory_file() -> tuple[str | None, str]:
+    result = export_user_memories(user_id=LOCAL_USER_ID, store=healthos_store)
+    if not result["ok"]:
+        error = result["error"]
+        return None, _error_text(error["error_code"], error["message"])
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", prefix="healthos-memories-", suffix=".json", delete=False
+    ) as target:
+        json.dump(result["data"], target, ensure_ascii=False, indent=2)
+        target.write("\n")
+        path = target.name
+    return path, "记忆导出文件已生成。文件不包含健康事件、API Key 或确认令牌。"
 
 
 def open_healthos_action(prompt: str) -> tuple[Any, str, dict[str, Any], Any]:
@@ -1800,6 +1967,14 @@ def open_knowledge_question() -> tuple[Any, str, dict[str, Any], Any]:
 
 def open_reminder_creation() -> tuple[Any, str, dict[str, Any], Any]:
     return open_healthos_action("我想创建一个提醒：")
+
+
+def open_active_check_in() -> tuple[Any, str, dict[str, Any], Any]:
+    """用可编辑自然语言进入确认链路，默认值不会直接启用任务。"""
+
+    return open_healthos_action(
+        "我想每天晚上 9 点通过飞书主动 check-in，关注饮食、饮水和运动"
+    )
 
 
 def open_reminder_management() -> tuple[Any, str, dict[str, Any], Any]:
@@ -3607,9 +3782,9 @@ def build_demo() -> gr.Blocks:
                 with gr.Column(elem_classes="page-wrap"):
                     gr.Markdown(
                         """
-                        <div class="page-title">
+                        <div class="page-title reminder-title">
                           <h2>提醒行动，也由你掌控。</h2>
-                          <p>小满先展示时间、时区和影响范围。确认后才安排，之后可以延后、暂停或取消。</p>
+                          <p>小满先展示发送位置、内容和时间。确认后才安排，之后可以延后、暂停或取消。</p>
                         </div>
                         """,
                         sanitize_html=False,
@@ -3618,20 +3793,37 @@ def build_demo() -> gr.Blocks:
                     with gr.Column(elem_classes="care-card"):
                         with gr.Row(elem_classes="card-heading-row"):
                             gr.Markdown(
-                                '<div><div class="section-heading">本地提醒</div>'
-                                '<p class="section-copy">当前为本地模拟 Provider，不会写入外部日历或系统通知。</p></div>',
+                                '<div><div class="section-heading">自动提醒</div>'
+                                f'<p class="section-copy">{escape(REMINDER_AUTOMATION_STATUS)}。'
+                                'Webhook 与签名密钥只保留在本机配置中。</p></div>',
                                 sanitize_html=False,
                                 container=False,
                             )
                             create_reminder_button = gr.Button(
                                 "创建提醒", variant="primary", size="sm", scale=0
                             )
+                            create_check_in_button = gr.Button(
+                                "设置主动 check-in", variant="secondary", size="sm", scale=0
+                            )
                             manage_reminder_button = gr.Button(
                                 "管理提醒", variant="secondary", size="sm", scale=0
                             )
+                        gr.Markdown(
+                            """
+                            <section class="check-in-setup">
+                              <div>
+                                <strong>主动 check-in 默认关闭</strong>
+                                <p>你选择时间和频率并确认后，小满才会通过飞书询问是否需要补记；缺少记录不等于没有完成。</p>
+                              </div>
+                              <span>需确认启用</span>
+                            </section>
+                            """,
+                            sanitize_html=False,
+                            container=False,
+                        )
                         reminders_table = gr.Dataframe(
-                            headers=["提醒内容", "计划时间", "状态", "时区", "状态记录"],
-                            datatype=["str", "str", "str", "str", "number"],
+                            headers=["提醒内容", "下次时间", "频率", "发送到", "状态", "时区", "状态记录"],
+                            datatype=["str", "str", "str", "str", "str", "str", "number"],
                             value=[],
                             interactive=False,
                             show_label=False,
@@ -3644,8 +3836,8 @@ def build_demo() -> gr.Blocks:
                     gr.Markdown(
                         """
                         <section class="reminder-boundary">
-                          <strong>本地提醒的能力边界</strong>
-                          <p>页面运行时可以安排和回查提醒状态；关闭应用后不会像手机系统闹钟一样主动弹出通知。</p>
+                          <strong>自动发送的能力边界</strong>
+                          <p>飞书任务仅在本地网页进程运行时调度。应用关闭期间不会发送，重新启动后会处理已到期且仍有效的提醒。</p>
                         </section>
                         """,
                         sanitize_html=False,
@@ -3977,6 +4169,45 @@ def build_demo() -> gr.Blocks:
                         container=False,
                     )
 
+                    memory_action_state = gr.State(value={})
+                    with gr.Column(elem_classes=["care-card", "memory-center"]):
+                        with gr.Row(elem_classes="card-heading-row"):
+                            gr.Markdown(
+                                '<div><div class="section-heading">小满记住了什么</div>'
+                                '<p class="section-copy">这里只显示你确认过的长期偏好。内部标识、健康参数和对话原文不会出现在列表中。</p></div>',
+                                sanitize_html=False,
+                                container=False,
+                            )
+                            refresh_memory_button = gr.Button("刷新记忆", variant="secondary", size="sm", scale=0)
+                        memory_table = gr.Dataframe(
+                            headers=["记忆类型", "记住的内容", "确认时间"],
+                            datatype=["str", "str", "str"],
+                            value=[],
+                            interactive=False,
+                            show_label=False,
+                            wrap=True,
+                            max_height=300,
+                            elem_classes="memory-table",
+                        )
+                        memory_selector = gr.Dropdown(
+                            label="选择要遗忘的内容",
+                            choices=[],
+                            value=None,
+                            info="删除后，下一轮对话不会再使用这项偏好。",
+                        )
+                        memory_status = gr.Markdown(container=False)
+                        memory_confirmation = gr.Markdown(
+                            value="", visible=False, sanitize_html=False, container=False
+                        )
+                        with gr.Row(elem_classes="memory-actions"):
+                            delete_memory_button = gr.Button("遗忘所选", variant="secondary")
+                            export_memory_button = gr.Button("导出记忆", variant="secondary")
+                            clear_memories_button = gr.Button("清除全部记忆", variant="stop")
+                        with gr.Row(elem_classes="memory-confirm-actions"):
+                            cancel_memory_button = gr.Button("取消", variant="secondary", visible=False)
+                            confirm_memory_button = gr.Button("确认执行", variant="stop", visible=False)
+                        memory_export_file = gr.File(label="记忆导出文件", visible=True)
+
         quick_record_button.click(
             fn=open_record_workspace,
             outputs=[main_tabs],
@@ -4007,6 +4238,52 @@ def build_demo() -> gr.Blocks:
                 timeline_table,
                 timeline_status,
             ],
+        )
+
+        refresh_memory_button.click(
+            fn=refresh_memory_center,
+            outputs=[memory_table, memory_selector, memory_status],
+            show_progress="hidden",
+        )
+
+        delete_memory_button.click(
+            fn=prepare_memory_delete,
+            inputs=[memory_selector],
+            outputs=[memory_action_state, memory_confirmation, confirm_memory_button, cancel_memory_button],
+            show_progress="hidden",
+        )
+
+        clear_memories_button.click(
+            fn=prepare_memory_clear,
+            outputs=[memory_action_state, memory_confirmation, confirm_memory_button, cancel_memory_button],
+            show_progress="hidden",
+        )
+
+        cancel_memory_button.click(
+            fn=cancel_memory_action,
+            outputs=[memory_action_state, memory_confirmation, confirm_memory_button, cancel_memory_button],
+            show_progress="hidden",
+        )
+
+        confirm_memory_button.click(
+            fn=confirm_memory_action,
+            inputs=[memory_action_state],
+            outputs=[
+                memory_table,
+                memory_selector,
+                memory_status,
+                memory_action_state,
+                memory_confirmation,
+                confirm_memory_button,
+                cancel_memory_button,
+            ],
+            show_progress="hidden",
+        )
+
+        export_memory_button.click(
+            fn=export_memory_file,
+            outputs=[memory_export_file, memory_status],
+            show_progress="hidden",
         )
 
         healthos_outputs = [
@@ -4044,6 +4321,7 @@ def build_demo() -> gr.Blocks:
             (ask_review_button, open_period_review),
             (ask_knowledge_button, open_knowledge_question),
             (create_reminder_button, open_reminder_creation),
+            (create_check_in_button, open_active_check_in),
             (manage_reminder_button, open_reminder_management),
         ):
             action_button.click(
@@ -4305,6 +4583,12 @@ def build_demo() -> gr.Blocks:
             fn=refresh_healthos_dashboard,
             inputs=[period_days],
             outputs=healthos_outputs,
+            show_progress="hidden",
+        )
+
+        demo.load(
+            fn=refresh_memory_center,
+            outputs=[memory_table, memory_selector, memory_status],
             show_progress="hidden",
         )
 

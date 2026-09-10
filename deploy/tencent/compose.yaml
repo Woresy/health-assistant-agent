@@ -1,0 +1,85 @@
+services:
+  healthos:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 7860
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Shanghai}
+      STORAGE_BACKEND: sqlite
+      SQLITE_DATABASE_PATH: /app/runtime/healthos.db
+      AGENT_TRACE_PATH: /app/runtime/agent_traces.jsonl
+      RAG_MODE: ${RAG_MODE:-lexical}
+      AGENT_PROVIDER_MODE: ${AGENT_PROVIDER_MODE:-disabled}
+      AGENT_API_KEY: ${AGENT_API_KEY:-}
+      AGENT_BASE_URL: ${AGENT_BASE_URL:-https://api.openai.com/v1}
+      AGENT_MODEL: ${AGENT_MODEL:-}
+      AGENT_TARGET_RESPONSE_SECONDS: ${AGENT_TARGET_RESPONSE_SECONDS:-15}
+      AGENT_REQUEST_TIMEOUT: ${AGENT_REQUEST_TIMEOUT:-60}
+      AGENT_MAX_RETRIES: 0
+      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-1024}
+      AGENT_THINKING_MODE: ${AGENT_THINKING_MODE:-auto}
+      AGENT_ORCHESTRATOR: ${AGENT_ORCHESTRATOR:-langgraph}
+      HEALTH_CONFIRMATION_SECRET: ${HEALTH_CONFIRMATION_SECRET:?请设置 HEALTH_CONFIRMATION_SECRET}
+      FEISHU_REMINDER_ENABLED: ${FEISHU_REMINDER_ENABLED:-false}
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      FEISHU_SIGNING_SECRET: ${FEISHU_SIGNING_SECRET:-}
+      FEISHU_DESTINATION_LABEL: ${FEISHU_DESTINATION_LABEL:-飞书群「健康提醒」}
+      FEISHU_REQUEST_TIMEOUT: ${FEISHU_REQUEST_TIMEOUT:-8}
+      REMINDER_POLL_SECONDS: ${REMINDER_POLL_SECONDS:-30}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-health-assistant-agent-tencent}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com/v1}
+      LANGSMITH_HIDE_INPUTS: ${LANGSMITH_HIDE_INPUTS:-true}
+      LANGSMITH_HIDE_OUTPUTS: ${LANGSMITH_HIDE_OUTPUTS:-true}
+      LANGSMITH_WORKSPACE_ID: ${LANGSMITH_WORKSPACE_ID:-}
+    volumes:
+      - ./runtime-data:/app/runtime
+    networks:
+      - private
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      healthos:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?请设置 DOMAIN}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?请设置 BASIC_AUTH_USER}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?请设置 BASIC_AUTH_HASH}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - private
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  private:
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -844,6 +844,45 @@ select {
     background: #f4f7f1;
 }
 
+.check-in-setup {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin: 14px 0;
+    padding: 13px 0;
+    border-top: 1px solid var(--care-line);
+    border-bottom: 1px solid var(--care-line);
+}
+
+.check-in-setup strong,
+.check-in-setup p {
+    display: block;
+}
+
+.check-in-setup strong {
+    color: var(--care-ink);
+    font-size: 13px;
+}
+
+.check-in-setup p {
+    margin: 3px 0 0 !important;
+    max-width: 70ch;
+    color: var(--care-muted);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.check-in-setup > span {
+    flex: 0 0 auto;
+    padding: 5px 8px;
+    border-radius: 999px;
+    background: var(--care-mint);
+    color: var(--care-green-dark);
+    font-size: 11px;
+    font-weight: 750;
+}
+
 .reminder-boundary strong {
     color: var(--care-ink);
     font-size: 13px;
@@ -873,6 +912,12 @@ select {
     .checkin-evidence {
         padding-block: 14px;
         border-top: 1px solid var(--care-line);
+    }
+
+    .check-in-setup {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 8px;
     }
 }
 
@@ -1551,6 +1596,10 @@ footer {
     max-width: none;
 }
 
+.page-title.reminder-title h2 {
+    max-width: none;
+}
+
 .conversation-starters {
     flex: 0 0 auto !important;
     min-height: 0 !important;
@@ -2120,5 +2169,64 @@ footer {
         transition-duration: .01ms !important;
         animation-duration: .01ms !important;
         animation-iteration-count: 1 !important;
+    }
+}
+
+.memory-center {
+    gap: 14px !important;
+}
+
+.memory-actions,
+.memory-confirm-actions {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 10px !important;
+}
+
+.memory-actions > *,
+.memory-confirm-actions > * {
+    min-width: 132px !important;
+    flex: 1 1 160px !important;
+}
+
+.memory-confirmation {
+    padding: 14px 16px;
+    border: 1px solid #d6e1d8;
+    border-radius: 12px;
+    background: #f4f7f1;
+    overflow-wrap: anywhere;
+}
+
+.memory-confirmation strong,
+.memory-confirmation p,
+.memory-confirmation small {
+    display: block;
+    color: #17382f;
+}
+
+.memory-confirmation p {
+    margin: 6px 0 2px;
+}
+
+.memory-confirmation small {
+    color: #53675d;
+}
+
+.memory-confirmation-danger {
+    border-color: #9d5547;
+    background: #fff3ef;
+}
+
+@media (max-width: 680px) {
+    .memory-actions,
+    .memory-confirm-actions {
+        display: grid !important;
+        grid-template-columns: 1fr;
+    }
+
+    .memory-actions > *,
+    .memory-confirm-actions > * {
+        width: 100% !important;
+        min-width: 0 !important;
     }
 }

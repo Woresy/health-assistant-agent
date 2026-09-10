@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install fixed dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Install browser test dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Static syntax check
+        run: python -m compileall -q app.py src scripts tests
+
+      - name: Validate Tencent Lighthouse deployment manifest
+        run: >-
+          docker compose
+          --env-file deploy/tencent/production.env.example
+          -f deploy/tencent/compose.yaml
+          config --quiet
+
+      - name: Build Tencent Lighthouse deployment image
+        run: docker build --tag healthos-agent:ci .
+
+      - name: Unit, evaluation and end-to-end tests
+        env:
+          AGENT_PROVIDER_MODE: disabled
+          RAG_MODE: lexical
+          LANGSMITH_TRACING: "false"
+        run: python -m pytest -q
+
+      - name: Browser end-to-end tests
+        env:
+          HEALTHOS_PYTHON: python
+        run: npm run test:browser
+
+      - name: Verify local performance contract
+        run: >-
+          python scripts/benchmark_performance.py
+          --assert-thresholds
+          --report /tmp/healthos-performance.json
+
+      - name: Verify GitHub delivery hygiene
+        run: >-
+          python scripts/check_release.py
+          --report /tmp/healthos-release-check.json
+
+      - name: Reproduce fixed offline RAG evaluation
+        run: >-
+          python scripts/run_eval.py
+          --mode lexical
+          --data data/samples/foods_sample.json
+          --index-dir data/index
+          --report /tmp/healthos-rag-eval.json
+
+      - name: Upload evaluation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-and-performance
+          path: |
+            /tmp/healthos-rag-eval.json
+            /tmp/healthos-performance.json
+            /tmp/healthos-release-check.json
+          if-no-files-found: error

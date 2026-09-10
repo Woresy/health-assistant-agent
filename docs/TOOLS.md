@@ -53,7 +53,7 @@ Router 还会区分三种调度结果：
 | `retrieve_health_knowledge` | 检索带来源的一般健康知识并执行安全边界 | `question`（1–500 字符）、`top_k`（1–5，默认 3） | `answer_scope`、带 URL 和更新时间的 citations、数量 | 否 | 否 | 未命中则明确证据不足；医疗、用药、紧急风险或提示注入触发拒答/就医引导，不自动重试绕过边界 |
 | `get_daily_summary` | 汇总指定日期的已确认事实和目标差距 | `date`、可选 `timezone_name` | 原始 events、分类汇总、目标差距、数据完整度 | 否 | 否 | 修正日期或时区后重试；存储失败则停止。当前返回原始 events，进入模型前应裁剪 |
 | `get_period_summary` | 汇总 7/14/30 天事实趋势，不推断原因 | `days=7/14/30`、可选 `end_date`、`timezone_name` | 日期范围、记录数、有数据天数、完整度、饮食/饮水/运动/体重事实、目标进度、解释边界 | 否 | 否 | 不支持的周期直接校验失败；查询或存储失败时返回错误，不用缺失数据补推原因 |
-| `create_reminder_draft` | 生成本地提醒草稿 | `content`（1–300 字符）、`scheduled_for`（ISO 8601）、可选时区 | 提醒 payload、预览、确认令牌、幂等键 | 本次调用不写；确认后创建提醒 | 是，安排前确认 | 提醒关闭时先征得同意修改设置；过去时间或格式错误时询问新的未来时间 |
+| `create_reminder_draft` | 生成普通提醒或主动 check-in 草稿 | `content`（1–300 字符）、`scheduled_for`（ISO 8601）、可选时区、`delivery_channel=local/feishu`；主动任务再传 `reminder_type=check_in`、`recurrence=daily/weekdays` 和关注项 | 发送目的地、内容、首次时间、频率与关注项预览，以及确认令牌和幂等键 | 本次调用不写；确认后创建提醒或重复 check-in | 是，启用前确认 | 飞书未配置时拒绝；主动 check-in 不允许本地或单次模式；过去时间或格式错误时说明恢复方式；Webhook 不由模型提供 |
 | `execute_reminder` | 用有效令牌真正执行提醒草稿 | `draft`、`confirmation_token`、`idempotency_key` | 已创建/变更的提醒、`idempotent_replay` | 是 | 是，必须已有有效确认令牌 | 令牌无效、payload 被篡改或草稿格式错误时拒绝执行；重复请求依赖幂等结果，不能生成第二条提醒 |
 | `list_or_cancel_reminders` | 查看提醒，或生成取消、延后、暂停、恢复草稿 | `action=list/cancel/snooze/pause/resume`；写操作需 `reminder_id`，延后还需新时间 | list 返回提醒列表；其他操作返回前后预览、令牌和幂等键 | `list` 不写；其他调用不立即写，确认后变更 | list 否；其他操作是 | 缺 ID/时间时追问；已结束提醒拒绝再次修改；存储失败时不显示成功 |
 
@@ -61,6 +61,11 @@ Router 还会区分三种调度结果：
 
 它目前属于 15 个公开 Schema，但从安全架构看应优先作为“确认中间件的服务端执行器”：
 模型负责提出提醒草稿，用户在 UI 确认，服务端再注入确认令牌和幂等键执行。不要让模型自行复制、改写或保存令牌。
+飞书提醒确认后只写入计划任务，由本地调度器到期发送；主动 check-in 仍复用这一个
+Tool，因此清单保持 15 个。Webhook 和签名密钥永远不进入 Tool Schema。
+
+记忆查看、逐条遗忘、导出和全部清除不属于模型 Tool。它们由“数据与隐私”页直接
+调用受信任服务，删除类操作二次确认，因此公开给模型的 Tool 数仍保持 15 个。
 
 ## 3. 当前是否每次把 15 个 Tool 都给模型
 

@@ -1,0 +1,16 @@
+{$DOMAIN} {
+    encode zstd gzip
+
+    basic_auth {
+        {$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+    }
+
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+    }
+
+    reverse_proxy healthos:7860
+}
