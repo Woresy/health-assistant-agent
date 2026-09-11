@@ -256,7 +256,15 @@ test("wide desktop: the full-width shell keeps sidebar controls inside the navig
 test("desktop: new conversations preserve and reopen real history", async () => {
   const { context, page } = await openApp({ width: 1440, height: 1000 });
   const input = page.getByPlaceholder("直接说：我刚喝了水");
-  await page.getByText(/对话已准备好|可以开始记录/).last().waitFor();
+  await page
+    .locator("#health-chat")
+    .getByText(/你好，我在这里/)
+    .waitFor();
+  assert.equal(
+    await page.getByText("记录会去哪里", { exact: true }).count(),
+    0,
+    "the removed conversation status card must not be rendered",
+  );
 
   await input.fill("第一段会话：请回复一声你好");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -303,6 +311,39 @@ test("desktop: new conversations preserve and reopen real history", async () => 
       .count(),
     0,
   );
+  await context.close();
+});
+
+test("desktop: meal images open a real review flow inside the conversation", async () => {
+  const { context, page } = await openApp({ width: 1440, height: 1000 });
+  assert.equal(
+    await page.getByRole("tab", { name: "餐食图片", exact: true }).count(),
+    0,
+    "meal images must not remain as a separate page",
+  );
+
+  const [fileChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByRole("button", { name: "添加图片", exact: true }).click(),
+  ]);
+  await fileChooser.setFiles(path.join(projectRoot, "tests/fixtures/meal.png"));
+  await page.getByText("核对这张餐食图片", { exact: true }).waitFor();
+  await page.getByLabel("食物名称").fill("米饭");
+  await page.getByLabel("估计份量（g）").fill("150");
+  await page.getByRole("button", { name: "查找可靠候选", exact: true }).click();
+  await page.getByText(/已加载 \d+ 个候选/).waitFor();
+  const candidate = page.getByLabel("确认食物候选");
+  if (!(await candidate.inputValue()).trim()) {
+    await candidate.click();
+    await page.getByRole("option").filter({ hasText: /米饭/ }).first().click();
+  }
+  await page.getByRole("button", { name: "生成营养估算", exact: true }).click();
+  await page.getByText("待确认饮食记录", { exact: true }).waitFor();
+  await page.getByText(/尚未保存/).waitFor();
+  if (screenshotDirectory) {
+    fs.mkdirSync(screenshotDirectory, { recursive: true });
+    await page.screenshot({ path: path.join(screenshotDirectory, "meal-chat-desktop.png"), fullPage: true });
+  }
   await context.close();
 });
 
@@ -363,7 +404,7 @@ test("desktop: remind-me prefix keeps a relative reminder in the deterministic f
   const { context, page } = await openApp({ width: 1440, height: 1000 });
   const input = page.getByPlaceholder("直接说：我刚喝了水");
 
-  await input.fill("提醒我2分钟后喝水");
+  await input.fill("我想创建一个提醒：两分钟后在飞书上提醒我去喝水");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await page.getByRole("button", { name: "确认安排提醒", exact: true }).waitFor();
   assert.equal(await page.getByText("提醒时间必须晚于当前时间", { exact: true }).count(), 0);
@@ -408,7 +449,8 @@ test("mobile: primary chat controls stay inside the viewport and remain keyboard
 
   const input = page.getByPlaceholder("直接说：我刚喝了水");
   const send = page.getByRole("button", { name: "发送", exact: true });
-  for (const locator of [input, send]) {
+  const addImage = page.getByRole("button", { name: "添加图片", exact: true });
+  for (const locator of [input, send, addImage]) {
     const box = await locator.boundingBox();
     assert.ok(box, "control must be visible");
     assert.ok(box.x >= 0 && box.x + box.width <= 390, "control must fit the viewport");

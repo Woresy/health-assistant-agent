@@ -200,7 +200,6 @@ APP_HEAD = """
       const goals = resolveTab("healthos-goals", "目标与教练");
       const timeline = resolveTab("healthos-timeline", "健康时间线");
       const reminders = resolveTab("healthos-reminders", "提醒");
-      const meal = resolveTab("healthos-meal", "餐食图片");
       const evidence = resolveTab("healthos-evidence", "运行证据");
       const privacy = resolveTab("healthos-privacy", "数据与隐私");
       [today, conversations, trends, goals, timeline].forEach((tab) => {
@@ -209,11 +208,10 @@ APP_HEAD = """
       if (todaySummary) todaySummary.dataset.healthosNav = "support";
       if (conversations) conversations.dataset.healthosDesktop = "hidden";
       if (reminders) reminders.dataset.healthosNav = "support";
-      if (meal) meal.dataset.healthosNav = "support";
       if (evidence) evidence.dataset.healthosNav = "utility-start";
       if (privacy) privacy.dataset.healthosNav = "utility";
       if (!nav.dataset.healthosOrdered) {
-        [today, conversations, trends, goals, timeline, evidence, privacy, todaySummary, reminders, meal]
+        [today, conversations, trends, goals, timeline, evidence, privacy, todaySummary, reminders]
           .filter(Boolean)
           .forEach((tab) => nav.appendChild(tab));
         nav.dataset.healthosOrdered = "true";
@@ -248,7 +246,7 @@ APP_HEAD = """
         [today, "今日观察"], [conversations, "历史对话"], [trends, "趋势与报告"],
         [goals, "目标与教练"], [timeline, "健康时间线"],
         [todaySummary, "今日完整汇总"],
-        [reminders, "提醒"], [meal, "餐食图片"],
+        [reminders, "提醒"],
         [evidence, "运行证据"], [privacy, "隐私与数据"],
       ]);
       pageNames.forEach((title, tab) => {
@@ -287,7 +285,7 @@ APP_HEAD = """
       }
       [
         ["今日完整汇总", todaySummary],
-        ["提醒", reminders], ["餐食图片", meal],
+        ["提醒", reminders],
         ["运行证据", evidence], ["数据与隐私", privacy],
       ].forEach(([key, tab]) => {
         if (menu.querySelector(`[data-healthos-tool="${key}"]`)) return;
@@ -2852,6 +2850,17 @@ def search_candidates(
     )
 
 
+def open_meal_image_workflow(
+    image_path: str | None,
+) -> tuple[gr.Column, str | None]:
+    """在对话中展开已上传餐食图片的核对流程。"""
+
+    return (
+        gr.Column(visible=bool(image_path)),
+        image_path,
+    )
+
+
 def calculate_meal_preview(
     image_path: str | None,
     food_query: str,
@@ -3155,6 +3164,9 @@ def cancel_meal_preview() -> tuple[
     str,
     str,
     str,
+    None,
+    None,
+    gr.Column,
 ]:
     """取消饮食草稿。"""
 
@@ -3169,6 +3181,9 @@ def cancel_meal_preview() -> tuple[
             "### 可重算证据\n\n"
             "尚未选择数据行并计算。"
         ),
+        None,
+        None,
+        gr.Column(visible=False),
     )
 
 
@@ -3956,6 +3971,19 @@ def build_demo() -> gr.Blocks:
                                 ),
                             ]
 
+                    agent_status = gr.State(
+                        (
+                            "对话服务已连接，可以开始记录。"
+                            if agent_model is not None
+                            else (
+                                "对话服务尚未启用。"
+                                "你仍可以使用今日概览、"
+                                "时间线和饮食记录。"
+                            )
+                        )
+                    )
+                    meal_preview_state = gr.State(value=None)
+
                     with gr.Row(
                         equal_height=False,
                         elem_classes="responsive-split-row",
@@ -4028,71 +4056,168 @@ def build_demo() -> gr.Blocks:
                                     min_width=126,
                                 )
 
-                            with gr.Row(elem_classes="composer-row"):
-                                chat_input = gr.Textbox(
-                                    show_label=False,
-                                    placeholder="直接说：我刚喝了水",
-                                    lines=1,
-                                    max_lines=4,
-                                    scale=8,
-                                    container=True,
+                            with gr.Column(
+                                visible=False,
+                                elem_classes="chat-meal-workflow",
+                            ) as meal_image_workflow:
+                                gr.Markdown(
+                                    """
+                                    <div class="chat-meal-heading">
+                                      <strong>核对这张餐食图片</strong>
+                                      <span>图片不会自动识别。填写食物和份量后，再从可靠数据源生成待确认记录。</span>
+                                    </div>
+                                    """,
+                                    sanitize_html=False,
+                                    container=False,
                                 )
 
-                                send_button = gr.Button(
-                                    "发送",
-                                    variant="primary",
-                                    size="md",
-                                    scale=1,
-                                    min_width=96,
-                                )
-
-                        with gr.Column(
-                            scale=1,
-                            min_width=270,
-                            elem_classes=["care-card", "status-card"],
-                        ):
-                            gr.Markdown(
-                                """
-                                <div class="section-heading">记录会去哪里</div>
-                                <p class="section-copy">草稿先留在对话里。确认保存后，“今天”会自动更新。</p>
-                                """,
-                                sanitize_html=False,
-                                container=False,
-                            )
-
-                            agent_status = gr.Markdown(
-                                (
-                                    "对话服务已连接，可以开始记录。"
-                                    if agent_model is not None
-                                    else (
-                                        "对话服务尚未启用。"
-                                        "你仍可以使用今日概览、"
-                                        "时间线和饮食记录。"
+                                with gr.Row(
+                                    equal_height=False,
+                                    elem_classes="chat-meal-inputs",
+                                ):
+                                    meal_image_preview = gr.Image(
+                                        value=None,
+                                        show_label=False,
+                                        interactive=False,
+                                        height=156,
+                                        elem_classes="chat-meal-image-preview",
                                     )
-                                ),
-                                elem_classes="agent-status",
-                                container=False,
-                            )
+                                    with gr.Column(
+                                        elem_classes="chat-meal-fields",
+                                    ):
+                                        food_query = gr.Textbox(
+                                            label="食物名称",
+                                            placeholder="例如：西红柿炒蛋",
+                                        )
+                                        grams_input = gr.Number(
+                                            label="估计份量（g）",
+                                            minimum=0.01,
+                                            maximum=10000,
+                                        )
 
-                            with gr.Column(elem_classes="action-row"):
-                                reset_agent_button = gr.Button(
-                                    "重置本次会话",
+                                search_button = gr.Button(
+                                    "查找可靠候选",
                                     variant="secondary",
-                                    size="sm",
+                                )
+                                candidate_status = gr.Markdown(
+                                    container=False,
+                                    elem_classes="meal-inline-status",
+                                )
+                                selected_food = gr.Dropdown(
+                                    label="确认食物候选",
+                                    choices=[],
+                                    value=None,
+                                    interactive=True,
                                 )
 
-                            gr.Markdown(
-                                """
-                                <div class="memory-note">
-                                  <strong>本地记忆已开启</strong>
-                                  <span>刷新页面会恢复这段对话。点击“重置本次会话”会清除历史。</span>
-                                </div>
-                                <p>需要确认时，操作卡片会直接出现在对话下方。</p>
-                                """,
-                                sanitize_html=False,
-                                elem_classes="action-help",
-                                container=False,
-                            )
+                                with gr.Accordion(
+                                    "查看候选检索证据",
+                                    open=False,
+                                ):
+                                    candidate_table = gr.Dataframe(
+                                        headers=[
+                                            "food_id",
+                                            "name",
+                                            "category",
+                                            "stage",
+                                            "match_type",
+                                            "matched_term",
+                                            "score",
+                                            "source",
+                                            "source_version",
+                                            "candidate_source",
+                                        ],
+                                        datatype=[
+                                            "str",
+                                            "str",
+                                            "str",
+                                            "number",
+                                            "str",
+                                            "str",
+                                            "number",
+                                            "str",
+                                            "str",
+                                            "str",
+                                        ],
+                                        value=[],
+                                        interactive=False,
+                                        show_label=False,
+                                        max_height=250,
+                                        elem_classes="candidate-table",
+                                    )
+
+                                calculate_button = gr.Button(
+                                    "生成营养估算",
+                                    variant="primary",
+                                )
+                                calculation_status = gr.Markdown(
+                                    container=False,
+                                    elem_classes="meal-inline-status",
+                                )
+                                meal_preview = gr.Markdown(
+                                    "尚未生成待确认记录。",
+                                    elem_classes="meal-preview",
+                                )
+
+                                with gr.Accordion(
+                                    "查看确定性计算公式",
+                                    open=False,
+                                ):
+                                    recompute_evidence = gr.Markdown(
+                                        "### 可重算证据\n\n"
+                                        "尚未选择数据行并计算。"
+                                    )
+
+                                with gr.Row(
+                                    elem_classes="meal-confirm-actions",
+                                ):
+                                    meal_cancel_button = gr.Button(
+                                        "取消草稿",
+                                        variant="secondary",
+                                    )
+                                    meal_save_button = gr.Button(
+                                        "确认保存",
+                                        variant="primary",
+                                    )
+                                meal_save_status = gr.Markdown(
+                                    container=False,
+                                    elem_classes="meal-inline-status",
+                                )
+
+                            with gr.Column(elem_classes="composer-shell"):
+                                with gr.Row(elem_classes="composer-row"):
+                                    chat_input = gr.Textbox(
+                                        show_label=False,
+                                        placeholder="直接说：我刚喝了水",
+                                        lines=1,
+                                        max_lines=4,
+                                        scale=8,
+                                        container=True,
+                                    )
+
+                                    send_button = gr.Button(
+                                        "发送",
+                                        variant="primary",
+                                        size="md",
+                                        scale=1,
+                                        min_width=96,
+                                    )
+
+                                with gr.Row(elem_classes="composer-tools"):
+                                    image_input = gr.UploadButton(
+                                        "添加图片",
+                                        file_count="single",
+                                        file_types=[
+                                            ".jpg",
+                                            ".jpeg",
+                                            ".png",
+                                        ],
+                                        type="filepath",
+                                        variant="secondary",
+                                        size="sm",
+                                        min_width=96,
+                                        elem_id="chat-meal-upload",
+                                    )
 
             with gr.Tab(
                 "对话",
@@ -4430,171 +4555,6 @@ def build_demo() -> gr.Blocks:
                         sanitize_html=False,
                         container=False,
                     )
-
-            with gr.Tab(
-                "餐食图片",
-                id="meal",
-                elem_id="healthos-meal",
-            ):
-                with gr.Column(elem_classes="page-wrap"):
-                    gr.Markdown(
-                        """
-                        <div class="page-title">
-                          <h2>一张照片，认真确认这一餐。</h2>
-                          <p>图片只作为记录入口。你确认食物与份量后，小满才从数据源检索并计算营养。</p>
-                        </div>
-                        """,
-                        sanitize_html=False,
-                        container=False,
-                    )
-
-                    meal_preview_state = gr.State(value=None)
-
-                    with gr.Row(
-                        equal_height=False,
-                        elem_classes="responsive-split-row",
-                    ):
-                        with gr.Column(
-                            scale=1,
-                            min_width=330,
-                            elem_classes=["care-card", "meal-step"],
-                        ):
-                            gr.Markdown(
-                                """
-                                <div class="section-heading"><i class="meal-step-number">1</i>添加与描述</div>
-                                <p class="section-copy">上传 JPG 或 PNG，并手动填写你认为最接近的食物名称。</p>
-                                """,
-                                sanitize_html=False,
-                                container=False,
-                            )
-
-                            image_input = gr.File(
-                                label="餐食图片",
-                                file_count="single",
-                                file_types=[
-                                    ".jpg",
-                                    ".jpeg",
-                                    ".png",
-                                ],
-                                type="filepath",
-                                height=190,
-                                elem_classes="meal-dropzone",
-                            )
-
-                            food_query = gr.Textbox(
-                                label="食物名称",
-                                placeholder="例如：西红柿炒蛋",
-                            )
-
-                            grams_input = gr.Number(
-                                label="估计份量（g）",
-                                minimum=0.01,
-                                maximum=10000,
-                            )
-
-                            search_button = gr.Button(
-                                "查找可靠候选",
-                                variant="secondary",
-                            )
-
-                            candidate_status = gr.Markdown(
-                                container=False,
-                            )
-
-                            with gr.Accordion(
-                                "查看候选检索证据",
-                                open=False,
-                            ):
-                                candidate_table = gr.Dataframe(
-                                    headers=[
-                                        "food_id",
-                                        "name",
-                                        "category",
-                                        "stage",
-                                        "match_type",
-                                        "matched_term",
-                                        "score",
-                                        "source",
-                                        "source_version",
-                                        "candidate_source",
-                                    ],
-                                    datatype=[
-                                        "str",
-                                        "str",
-                                        "str",
-                                        "number",
-                                        "str",
-                                        "str",
-                                        "number",
-                                        "str",
-                                        "str",
-                                        "str",
-                                    ],
-                                    value=[],
-                                    interactive=False,
-                                    show_label=False,
-                                    max_height=250,
-                                    elem_classes="candidate-table",
-                                )
-
-                        with gr.Column(
-                            scale=1,
-                            min_width=330,
-                            elem_classes=["care-card", "meal-step"],
-                        ):
-                            gr.Markdown(
-                                """
-                                <div class="section-heading"><i class="meal-step-number">2</i>核对与保存</div>
-                                <p class="section-copy">候选不会被静默选中。请核对数据行，再生成待确认草稿。</p>
-                                """,
-                                sanitize_html=False,
-                                container=False,
-                            )
-
-                            selected_food = gr.Dropdown(
-                                label="确认食物候选",
-                                choices=[],
-                                value=None,
-                                interactive=True,
-                            )
-
-                            calculate_button = gr.Button(
-                                "生成营养估算",
-                                variant="primary",
-                            )
-
-                            calculation_status = gr.Markdown(
-                                container=False,
-                            )
-
-                            meal_preview = gr.Markdown(
-                                "尚未生成待确认记录。",
-                                elem_classes="meal-preview",
-                            )
-
-                            with gr.Accordion(
-                                "查看确定性计算公式",
-                                open=False,
-                            ):
-                                recompute_evidence = gr.Markdown(
-                                    "### 可重算证据\n\n"
-                                    "尚未选择数据行并计算。"
-                                )
-
-                            with gr.Row(elem_classes="action-row"):
-                                meal_save_button = gr.Button(
-                                    "确认保存",
-                                    variant="primary",
-                                )
-
-                                meal_cancel_button = gr.Button(
-                                    "取消草稿",
-                                    variant="stop",
-                                )
-
-                            meal_save_status = gr.Markdown(
-                                container=False,
-                            )
 
             with gr.Tab(
                 "运行证据",
@@ -5001,6 +4961,16 @@ def build_demo() -> gr.Blocks:
                 show_progress="hidden",
             )
 
+        image_input.upload(
+            fn=open_meal_image_workflow,
+            inputs=[image_input],
+            outputs=[
+                meal_image_workflow,
+                meal_image_preview,
+            ],
+            show_progress="hidden",
+        )
+
         search_button.click(
             fn=search_candidates,
             inputs=[
@@ -5067,6 +5037,9 @@ def build_demo() -> gr.Blocks:
                 meal_save_status,
                 meal_preview,
                 recompute_evidence,
+                image_input,
+                meal_image_preview,
+                meal_image_workflow,
             ],
         )
 
@@ -5230,27 +5203,26 @@ def build_demo() -> gr.Blocks:
             show_progress="hidden",
         )
 
-        for reset_button in (reset_agent_button, mobile_reset_agent_button):
-            reset_conversation_event = reset_button.click(
-                fn=reset_agent_conversation,
-                outputs=[
-                    chatbot,
-                    agent_status,
-                    latest_agent_steps,
-                    latest_agent_state,
-                    pending_agent_card,
-                    confirm_agent_button,
-                    cancel_agent_button,
-                    selected_record_state,
-                    selected_record_context,
-                ],
-            )
-            reset_conversation_event.then(
-                fn=refresh_conversation_pickers,
-                inputs=[browser_conversation_id],
-                outputs=[sidebar_conversations, mobile_conversations],
-                show_progress="hidden",
-            )
+        reset_conversation_event = mobile_reset_agent_button.click(
+            fn=reset_agent_conversation,
+            outputs=[
+                chatbot,
+                agent_status,
+                latest_agent_steps,
+                latest_agent_state,
+                pending_agent_card,
+                confirm_agent_button,
+                cancel_agent_button,
+                selected_record_state,
+                selected_record_context,
+            ],
+        )
+        reset_conversation_event.then(
+            fn=refresh_conversation_pickers,
+            inputs=[browser_conversation_id],
+            outputs=[sidebar_conversations, mobile_conversations],
+            show_progress="hidden",
+        )
 
         refresh_agent_trace_button.click(
             fn=refresh_agent_traces,

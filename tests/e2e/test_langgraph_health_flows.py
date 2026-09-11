@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -356,6 +358,49 @@ def test_remind_me_prefix_relative_reminder_does_not_wait_for_model(
     assert prepared.model_rounds == 0
     assert prepared.pending_confirmation is not None
     assert prepared.answer != "提醒时间必须晚于当前时间"
+    assert model.received_messages == []
+
+
+def test_relative_feishu_reminder_uses_local_current_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """自然语言里的相对时间应按用户时区计算，无需 ISO 8601。"""
+
+    monkeypatch.setenv("FEISHU_REMINDER_ENABLED", "true")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/example",
+    )
+    event_store = HealthEventStore(tmp_path / "health_events.jsonl")
+    router = HealthToolRouter(
+        event_store,
+        healthos_store=HealthOSStore(tmp_path / "healthos.json"),
+    )
+    model = FakeAgentModel([])
+    runner = LangGraphAgentRunner(model=model, router=router)
+    session = ConversationSession(
+        runner=runner,
+        session_id="direct-feishu-relative-reminder",
+        user_id="user-1",
+        timezone_name="Asia/Shanghai",
+    )
+    before = datetime.now(ZoneInfo("Asia/Shanghai"))
+
+    prepared = session.send(
+        "我想创建一个提醒：两分钟后在飞书上提醒我去喝水"
+    )
+
+    after = datetime.now(ZoneInfo("Asia/Shanghai"))
+    assert prepared.model_rounds == 0
+    assert prepared.pending_confirmation is not None
+    preview = prepared.pending_confirmation.draft_data["preview"]
+    scheduled_for = datetime.fromisoformat(preview["scheduled_for"])
+    assert before + timedelta(minutes=2, seconds=-1) <= scheduled_for
+    assert scheduled_for <= after + timedelta(minutes=2, seconds=1)
+    assert preview["timezone_name"] == "Asia/Shanghai"
+    assert preview["delivery_channel"] == "feishu"
+    assert preview["content"] == "去喝水"
     assert model.received_messages == []
 
 

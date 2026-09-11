@@ -152,8 +152,8 @@ TOOL_REQUIRED_RETRY_PROMPT = """
 _RELATIVE_REMINDER_PATTERN = re.compile(
     r"(?P<amount>\d{1,4}|[一二两三四五六七八九十]{1,3})\s*"
     r"(?P<unit>分钟|小时)\s*后\s*"
-    r"(?:(?:通过|用)\s*)?(?P<channel>飞书|本地)?\s*"
-    r"提醒我(?P<content>.+)"
+    r"(?:(?:在|通过|用)\s*)?(?P<channel>飞书|本地)?(?:上)?\s*"
+    r"提醒我\s*(?P<content>.+)"
 )
 
 _PREFIX_RELATIVE_REMINDER_PATTERN = re.compile(
@@ -259,9 +259,9 @@ def _try_direct_relative_reminder(
             "check_in_focus": check_in_focus,
         }
     else:
-        matched = _RELATIVE_REMINDER_PATTERN.fullmatch(
+        matched = _RELATIVE_REMINDER_PATTERN.search(
             normalized_text
-        ) or _PREFIX_RELATIVE_REMINDER_PATTERN.fullmatch(
+        ) or _PREFIX_RELATIVE_REMINDER_PATTERN.search(
             normalized_text
         )
         if matched is None:
@@ -285,7 +285,10 @@ def _try_direct_relative_reminder(
             "scheduled_for": scheduled_for.isoformat(),
             "timezone_name": session_state.timezone_name,
             "delivery_channel": (
-                "feishu" if matched.group("channel") == "飞书" else "local"
+                "feishu"
+                if matched.group("channel") == "飞书"
+                or "飞书" in normalized_text
+                else "local"
             ),
         }
 
