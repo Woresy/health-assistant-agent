@@ -381,10 +381,11 @@ def prepare_update_health_event(
                 )
             )
         )
-    except ValidationError as exc:
+    except ValidationError:
         return _error(
             "PATCH_VALIDATION_ERROR",
-            f"更新字段校验失败：{exc}",
+            "这条修改还没有整理成可保存的格式，本次没有写入。"
+            "请重新说明要修改的内容；修改饮食时请提供食物名称和大致份量。",
         )
 
     try:
@@ -545,11 +546,11 @@ def prepare_update_health_event(
                 replacement_data
             )
         )
-    except ValidationError as exc:
+    except ValidationError:
         return _error(
             "VALIDATION_ERROR",
-            "更新后的健康事件"
-            f"校验失败：{exc}",
+            "修改后的记录格式不完整，本次没有写入。"
+            "请检查食物、份量或其他健康数值后重试。",
         )
 
     if (

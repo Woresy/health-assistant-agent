@@ -86,3 +86,31 @@ def test_rejects_unsafe_session_id(
     with pytest.raises(ValueError):
         store.load("../../outside")
 
+
+def test_lists_only_the_requested_users_conversations(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / "conversations")
+    first = _state()
+    second = first.model_copy(
+        update={
+            "session_id": "conversation-fedcba9876543210fedcba9876543210",
+            "messages": (
+                AgentMessage(role="user", content="帮我回看最近的运动记录和饮水情况"),
+                AgentMessage(role="assistant", content="可以。"),
+            ),
+        }
+    )
+    other_user = first.model_copy(
+        update={
+            "session_id": "conversation-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "user_id": "other-user",
+        }
+    )
+    store.save(first)
+    store.save(second)
+    store.save(other_user)
+
+    summaries = store.list_summaries("local-demo-user")
+
+    assert {item.session_id for item in summaries} == {first.session_id, second.session_id}
+    assert next(item for item in summaries if item.session_id == second.session_id).title == "帮我回看最近的运动记录和饮水情况"
+    assert all(item.user_id == "local-demo-user" for item in summaries)

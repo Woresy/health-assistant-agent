@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -75,6 +76,64 @@ def _parse_datetime(value: str, timezone_name: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         parsed = parsed.replace(tzinfo=active_timezone)
     return parsed
+
+
+_RELATIVE_REMINDER_TIME = re.compile(
+    r"^(?P<amount>\d{1,4}|[一二两三四五六七八九十]{1,3})\s*"
+    r"(?P<unit>分钟|小时)\s*后$"
+)
+
+
+def _relative_time_amount(raw_value: str) -> int | None:
+    """解析提醒工具允许的小型正整数。"""
+
+    if raw_value.isdigit():
+        value = int(raw_value)
+        return value if value > 0 else None
+    digits = {
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    if raw_value in digits:
+        return digits[raw_value]
+    if raw_value == "十":
+        return 10
+    if "十" in raw_value:
+        tens_text, ones_text = raw_value.split("十", 1)
+        tens = digits.get(tens_text, 1) if tens_text else 1
+        ones = digits.get(ones_text, 0) if ones_text else 0
+        return tens * 10 + ones
+    return None
+
+
+def _parse_reminder_datetime(value: str, timezone_name: str) -> datetime:
+    """提醒时间既接受 ISO 时间，也接受受控的相对时长。"""
+
+    normalized = value.strip()
+    relative_match = _RELATIVE_REMINDER_TIME.fullmatch(normalized)
+    if relative_match is None:
+        return _parse_datetime(normalized, timezone_name)
+    amount = _relative_time_amount(relative_match.group("amount"))
+    if amount is None:
+        raise ValueError("相对提醒时间必须大于 0")
+    try:
+        active_timezone = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"无法加载时区：{timezone_name}") from exc
+    delta = (
+        timedelta(minutes=amount)
+        if relative_match.group("unit") == "分钟"
+        else timedelta(hours=amount)
+    )
+    return (datetime.now(active_timezone) + delta).replace(microsecond=0)
 
 
 def _draft(
@@ -556,7 +615,7 @@ def create_reminder_draft(
         profile = store.get_profile(user_id, timezone_name)
         if not profile.reminders_enabled:
             return _failure("REMINDERS_DISABLED", "提醒已关闭，请先在档案中开启")
-        scheduled = _parse_datetime(scheduled_for, profile.timezone_name)
+        scheduled = _parse_reminder_datetime(scheduled_for, profile.timezone_name)
         if scheduled <= datetime.now(timezone.utc).astimezone(scheduled.tzinfo):
             return _failure("REMINDER_TIME_PAST", "提醒时间必须晚于当前时间")
         reminder_id = uuid4()

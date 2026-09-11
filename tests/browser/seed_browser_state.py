@@ -13,11 +13,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.agent.models import AgentMessage, SessionState
 from src.health.models import HealthEvent
 from src.healthos.memory_control import sync_profile_memories
 from src.healthos.models import CoachStyle, UserProfile
 from src.storage.sqlite_store import (
     SQLiteDatabase,
+    SQLiteConversationStore,
     SQLiteHealthEventStore,
     SQLiteHealthOSStore,
 )
@@ -30,6 +32,7 @@ def seed(database_path: Path) -> None:
     database = SQLiteDatabase(database_path)
     event_store = SQLiteHealthEventStore(database)
     healthos_store = SQLiteHealthOSStore(database)
+    conversation_store = SQLiteConversationStore(database)
     now = datetime.now(ZoneInfo("Asia/Shanghai")).replace(microsecond=0)
 
     event_store.append(
@@ -62,6 +65,25 @@ def seed(database_path: Path) -> None:
         sync_profile_memories(state, profile)
 
     healthos_store.update(add_profile)
+
+    for index in range(14):
+        conversation_store.save(
+            SessionState(
+                session_id=f"conversation-{index + 1:032x}",
+                user_id=USER_ID,
+                messages=(
+                    AgentMessage(
+                        role="user",
+                        content=f"历史健康对话 {index + 1}",
+                    ),
+                    AgentMessage(
+                        role="assistant",
+                        content="这是一段用于宽屏布局验收的历史对话。",
+                    ),
+                ),
+                turn_count=1,
+            )
+        )
 
 
 if __name__ == "__main__":

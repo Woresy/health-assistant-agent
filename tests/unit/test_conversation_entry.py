@@ -15,7 +15,20 @@ def test_conversation_is_default_entry_with_working_starters() -> None:
     """首屏应直接开聊，并提供真实快捷语句。"""
 
     script = r'''
-from src.ui.app import build_demo
+from src.ui.app import begin_agent_activity, build_demo, finish_agent_activity
+
+active_process = begin_agent_activity("我今天喝了多少水", {})
+assert active_process.value.count("<li") == 3
+assert "小满正在处理" in active_process.value
+assert "不包含模型内部思维链" in active_process.value
+
+finished_process = finish_agent_activity(
+    "本轮操作已完成。",
+    [{"tool": "query_health_events", "status": "成功", "source": "本地 SQLite 业务数据"}],
+)
+assert "处理过程" in finished_process.value
+assert "读取已确认的健康记录" in finished_process.value
+assert "本地 SQLite 业务数据 · 成功" in finished_process.value
 
 config = build_demo().get_config_file()
 components = config["components"]
@@ -53,7 +66,7 @@ button_values = {
     for component in components
     if component.get("type") == "button"
 }
-assert starters | {"查看今天"} <= button_values
+assert starters | {"查看完整汇总", "＋  创建新对话"} <= button_values
 
 starter_button_ids = {
     component["id"]

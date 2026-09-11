@@ -176,6 +176,20 @@ def test_reminder_lifecycle_requires_confirmation(router: HealthToolRouter) -> N
     assert len(final["transitions"]) == 2
 
 
+def test_reminder_draft_accepts_relative_scheduled_for(
+    router: HealthToolRouter,
+) -> None:
+    draft = dispatch(
+        router,
+        "create_reminder_draft",
+        {"content": "喝水", "scheduled_for": "2分钟后"},
+        "reminder-relative-scheduled-for",
+    )
+
+    assert draft.result["ok"] is True
+    assert draft.result["data"]["preview"]["content"] == "喝水"
+
+
 def test_reminder_intent_only_exposes_reminder_tools(router: HealthToolRouter) -> None:
     definitions = router.tool_definitions_for(
         "两分钟后通过飞书提醒我喝水"

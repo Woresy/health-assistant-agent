@@ -42,18 +42,20 @@ function startModelServer(port) {
       }
       request.resume();
       request.on("end", () => {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({
-          id: "browser-e2e-response",
-          object: "chat.completion",
-          created: Math.floor(Date.now() / 1000),
-          model: "browser-e2e-model",
-          choices: [{
-            index: 0,
-            message: { role: "assistant", content: "浏览器测试回复：消息已收到。" },
-            finish_reason: "stop",
-          }],
-        }));
+        setTimeout(() => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({
+            id: "browser-e2e-response",
+            object: "chat.completion",
+            created: Math.floor(Date.now() / 1000),
+            model: "browser-e2e-model",
+            choices: [{
+              index: 0,
+              message: { role: "assistant", content: "浏览器测试回复：消息已收到。" },
+              finish_reason: "stop",
+            }],
+          }));
+        }, 450);
       });
     });
     modelServer.listen(port, "127.0.0.1", resolve);
@@ -81,7 +83,7 @@ async function openApp(viewport) {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-  await page.getByRole("heading", { name: "个人健康工作台" }).waitFor();
+  await page.getByRole("heading", { name: "今日观察", exact: true }).waitFor();
   return { context, page };
 }
 
@@ -89,6 +91,15 @@ async function openNavigation(page, name) {
   const tab = page.getByRole("tab", { name, exact: true });
   if (await tab.isVisible()) {
     await tab.click();
+    return;
+  }
+  const mobileMore = page.getByRole("button", { name: "更多", exact: true });
+  if (await mobileMore.isVisible()) {
+    await mobileMore.click();
+    await page
+      .locator("#mobileToolsMenu button:visible")
+      .filter({ hasText: new RegExp(`^${name}$`) })
+      .click();
     return;
   }
   await page.getByRole("button", { name: "More tabs" }).click();
@@ -163,6 +174,12 @@ test("desktop: history restores and a daily record opens its edit conversation",
   const input = page.getByPlaceholder("直接说：我刚喝了水");
   await input.fill("请回复这条浏览器测试消息");
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  await page.getByText("小满正在处理", { exact: true }).waitFor();
+  await page.getByText("正在选择合适的健康工具", { exact: true }).waitFor();
+  if (screenshotDirectory) {
+    fs.mkdirSync(screenshotDirectory, { recursive: true });
+    await page.screenshot({ path: path.join(screenshotDirectory, "thinking-desktop.png"), fullPage: false });
+  }
   try {
     await page.getByText("浏览器测试回复：消息已收到。").waitFor();
   } catch (error) {
@@ -170,19 +187,131 @@ test("desktop: history restores and a daily record opens its edit conversation",
     console.error(serverOutput);
     throw error;
   }
+  const processSummary = page.locator("details.agent-process summary").filter({ hasText: "处理过程" });
+  await processSummary.waitFor();
+  await processSummary.click();
+  await page.getByText("理解你的请求与当前对话", { exact: true }).waitFor();
+  if (screenshotDirectory) {
+    await page.screenshot({ path: path.join(screenshotDirectory, "process-desktop.png"), fullPage: false });
+  }
 
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.getByText("请回复这条浏览器测试消息").waitFor();
+  await page.locator("#health-chat").getByText("请回复这条浏览器测试消息", { exact: true }).waitFor();
   await page.getByText("浏览器测试回复：消息已收到。").waitFor();
 
-  await openNavigation(page, "今天");
-  await page.getByRole("button", { name: "刷新今日", exact: true }).click();
+  await page.locator("#healthos-record").waitFor();
+  await page.getByText(/未设置目标/).first().waitFor();
+  assert.equal(await page.getByText(/1800 ml/).count(), 0);
+  if (screenshotDirectory) {
+    fs.mkdirSync(screenshotDirectory, { recursive: true });
+    await page.screenshot({ path: path.join(screenshotDirectory, "desktop.png"), fullPage: false });
+  }
   const waterRecord = page.getByRole("button", { name: "水 350 ml", exact: true });
   await waterRecord.waitFor();
   await waterRecord.click();
   await page.getByText("正在修改").waitFor();
   assert.equal(await page.locator("#healthos-record").isVisible(), true);
   assert.equal(await page.getByPlaceholder("直接说：我刚喝了水").inputValue(), "请把这条记录修改为：");
+  await context.close();
+});
+
+test("wide desktop: the full-width shell keeps sidebar controls inside the navigation rail", async () => {
+  const { context, page } = await openApp({ width: 1920, height: 1000 });
+  const shell = await page.locator(".gradio-container").boundingBox();
+  const createConversation = await page
+    .getByRole("button", { name: /创建新对话/ })
+    .first()
+    .boundingBox();
+  const conversationListLocator = page.locator("#sidebar-conversations");
+  const conversationList = await conversationListLocator.boundingBox();
+
+  assert.ok(shell, "application shell must be rendered");
+  assert.ok(shell.x <= 1 && shell.width >= 1919, "application shell must span a wide viewport");
+  for (const box of [createConversation, conversationList]) {
+    assert.ok(box, "sidebar control must be rendered");
+    assert.ok(box.x >= 0 && box.x + box.width <= 252, "sidebar control must stay inside the 252px rail");
+  }
+  const itemBoxes = await page
+    .locator("#sidebar-conversations label:has(input)")
+    .evaluateAll((elements) =>
+      elements.slice(0, 8).map((element) => element.getBoundingClientRect().toJSON()),
+    );
+  assert.ok(itemBoxes.length >= 8, "wide layout fixture must exercise a long history list");
+  assert.ok(
+    itemBoxes.every((box) => Math.abs(box.x - itemBoxes[0].x) < 1),
+    "history entries must remain in one vertical column",
+  );
+  assert.ok(
+    conversationList && conversationList.y + conversationList.height <= 1000,
+    "history scroller must stay inside the viewport",
+  );
+  assert.equal(await page.getByText("本地真实数据", { exact: true }).count(), 0);
+  if (screenshotDirectory) {
+    fs.mkdirSync(screenshotDirectory, { recursive: true });
+    await page.screenshot({ path: path.join(screenshotDirectory, "desktop-wide.png"), fullPage: false });
+  }
+  await context.close();
+});
+
+test("desktop: new conversations preserve and reopen real history", async () => {
+  const { context, page } = await openApp({ width: 1440, height: 1000 });
+  const input = page.getByPlaceholder("直接说：我刚喝了水");
+  await page.getByText(/对话已准备好|可以开始记录/).last().waitFor();
+
+  await input.fill("第一段会话：请回复一声你好");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  try {
+    await page.getByText("浏览器测试回复：消息已收到。").waitFor();
+  } catch (error) {
+    console.error((await page.locator("body").innerText()).slice(-5000));
+    console.error(serverOutput);
+    throw error;
+  }
+  const firstConversation = page
+    .locator("#sidebar-conversations label")
+    .filter({ hasText: "第一段会话：请回复一声你好" });
+  await firstConversation.waitFor();
+
+  await page.getByRole("button", { name: /创建新对话/ }).first().click();
+  await input.fill("第二段会话：请回复一声晚上好");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await page
+    .locator("#health-chat")
+    .getByText("第二段会话：请回复一声晚上好", { exact: true })
+    .waitFor();
+  await page
+    .locator("#sidebar-conversations label")
+    .filter({ hasText: "第二段会话：请回复一声晚上好" })
+    .waitFor();
+  await page.locator("#sidebar-conversations input:checked").waitFor();
+
+  await firstConversation.click();
+  try {
+    await page
+      .locator("#health-chat")
+      .getByText("第一段会话：请回复一声你好", { exact: true })
+      .waitFor();
+  } catch (error) {
+    console.error((await page.locator("body").innerText()).slice(-5000));
+    console.error(serverOutput);
+    throw error;
+  }
+  assert.equal(
+    await page
+      .locator("#health-chat")
+      .getByText("第二段会话：请回复一声晚上好", { exact: true })
+      .count(),
+    0,
+  );
+  await context.close();
+});
+
+test("desktop: trends use the existing daily summaries without fabricated scores", async () => {
+  const { context, page } = await openApp({ width: 1440, height: 1000 });
+  await openNavigation(page, "趋势与报告");
+  await page.getByRole("button", { name: "刷新趋势", exact: true }).click();
+  await page.locator('#healthos-trends .cell-wrap:visible').filter({ hasText: "350 ml" }).waitFor();
+  await page.getByText(/1 天有数据/).waitFor();
   await context.close();
 });
 
@@ -230,10 +359,52 @@ test("desktop: active check-in stays off until its in-chat draft is confirmed", 
   await context.close();
 });
 
+test("desktop: remind-me prefix keeps a relative reminder in the deterministic flow", async () => {
+  const { context, page } = await openApp({ width: 1440, height: 1000 });
+  const input = page.getByPlaceholder("直接说：我刚喝了水");
+
+  await input.fill("提醒我2分钟后喝水");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await page.getByRole("button", { name: "确认安排提醒", exact: true }).waitFor();
+  assert.equal(await page.getByText("提醒时间必须晚于当前时间", { exact: true }).count(), 0);
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await context.close();
+});
+
 test("mobile: primary chat controls stay inside the viewport and remain keyboard reachable", async () => {
   const { context, page } = await openApp({ width: 390, height: 844 });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-  assert.ok(overflow <= 1, `page has ${overflow}px horizontal overflow`);
+  const overflowSources = overflow > 1
+    ? await page.evaluate(() => Array.from(document.querySelectorAll("body *"))
+      .map((element) => ({
+        tag: element.tagName,
+        id: element.id,
+        className: typeof element.className === "string" ? element.className : "",
+        rect: element.getBoundingClientRect().toJSON(),
+      }))
+      .filter(({ rect }) => rect.width > 0 && (rect.right > window.innerWidth + 1 || rect.left < -1))
+      .slice(0, 12))
+    : [];
+  assert.ok(overflow <= 1, `page has ${overflow}px horizontal overflow: ${JSON.stringify(overflowSources)}`);
+  for (const name of ["今日观察", "对话", "健康时间线", "趋势与报告", "目标与教练"]) {
+    assert.equal(await page.getByRole("tab", { name, exact: true }).isVisible(), true);
+  }
+  assert.equal(await page.getByRole("button", { name: "更多", exact: true }).isVisible(), true);
+  const moreBox = await page.getByRole("button", { name: "更多", exact: true }).boundingBox();
+  assert.ok(moreBox && moreBox.x >= 0 && moreBox.x + moreBox.width <= 390, "mobile more menu must fit the viewport");
+  await page.getByRole("button", { name: "更多", exact: true }).click();
+  await page.locator("#mobileToolsMenu").getByRole("button", { name: "数据与隐私", exact: true }).waitFor();
+  await page.getByRole("button", { name: "更多", exact: true }).click();
+  const topbarBox = await page.locator(".app-topbar").boundingBox();
+  assert.ok(topbarBox, "mobile top bar must be visible");
+  assert.ok(topbarBox.x <= 1 && topbarBox.y <= 1, "mobile top bar must start at the viewport origin");
+  assert.ok(topbarBox.width >= 389, "mobile top bar must span the viewport");
+  const topbarTitleBox = await page.locator(".app-topbar h1").boundingBox();
+  assert.ok(topbarTitleBox, "mobile top-bar title must be visible");
+  assert.ok(
+    topbarTitleBox.x >= 0 && topbarTitleBox.x + topbarTitleBox.width <= 390,
+    "mobile top-bar title must fit the viewport",
+  );
 
   const input = page.getByPlaceholder("直接说：我刚喝了水");
   const send = page.getByRole("button", { name: "发送", exact: true });
@@ -249,6 +420,8 @@ test("mobile: primary chat controls stay inside the viewport and remain keyboard
   if (screenshotDirectory) {
     fs.mkdirSync(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "chat-mobile.png"), fullPage: true });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: path.join(screenshotDirectory, "mobile.png"), fullPage: false });
   }
   await context.close();
 });

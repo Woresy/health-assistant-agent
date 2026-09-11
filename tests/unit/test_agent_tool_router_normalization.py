@@ -13,6 +13,7 @@ from src.agent.models import (
 )
 from src.agent.tool_router import (
     HealthToolRouter,
+    PrepareEventChangeArguments,
 )
 from src.storage.jsonl_store import (
     HealthEventStore,
@@ -143,6 +144,44 @@ def test_unknown_water_field_is_still_rejected(
     )
 
     assert store.read_all() == []
+
+
+def test_meal_update_alias_is_normalized_to_payload_with_source() -> None:
+    meal_payload = {
+        "food": {
+            "food_id": "FOOD_002",
+            "name": "米饭",
+            "category": "谷薯类",
+        },
+        "portion": {"grams": 200, "unit": "g"},
+        "nutrition": {
+            "calories_kcal": 232,
+            "protein_g": 5.2,
+            "fat_g": 0.6,
+            "carbs_g": 51.8,
+            "source_ref": "sample:FOOD_002",
+            "retrieval_query": "米饭",
+            "selected_food_code": "FOOD_002",
+            "portion_assumption": "可食部分 200g",
+            "estimated": True,
+        },
+        "retrieval_query": "米饭",
+        "candidate_source": "manual",
+        "estimated": True,
+    }
+
+    arguments = PrepareEventChangeArguments.model_validate(
+        {
+            "operation": "update",
+            "event_id": "test-event",
+            "patch": {"meal_payload": meal_payload},
+        }
+    )
+
+    assert arguments.patch == {
+        "payload": meal_payload,
+        "source_refs": ["sample:FOOD_002"],
+    }
 
 
 @pytest.mark.parametrize(

@@ -56,7 +56,8 @@ SYSTEM_PROMPT = """
    prepare_health_event；营养来源由工具结果提供，不得向用户索取 source_refs 等内部字段。
 16. 只有工具真正返回草稿后，才能告诉用户等待确认。
 17. 用户可以用时间、类型和内容指代记录。修改或删除缺少 event_id 时，先调用
-   get_health_events 查找候选；多条相似记录时用自然语言请用户进一步说明。
+   get_health_events 查找候选；多条相似记录时用自然语言请用户进一步说明。修改饮食
+   的食物或份量时，也必须重新执行营养候选检索与计算，再把完整结果放入 patch.payload。
 18. 面向用户的回答不得展示 UUID、内部 ID、原始 JSON、确认令牌或内部字段名。
 19. 教练风格只改变表达，不得改变事实、数值、来源、安全规则或确认要求。
 20. “我今天吃了什么”“今天喝了多少”“今天记录了什么”等问句属于查询，调用
@@ -155,6 +156,14 @@ _RELATIVE_REMINDER_PATTERN = re.compile(
     r"提醒我(?P<content>.+)"
 )
 
+_PREFIX_RELATIVE_REMINDER_PATTERN = re.compile(
+    r"(?:(?:通过|用)\s*)?(?P<channel>飞书|本地)?\s*"
+    r"提醒我\s*(?:在\s*)?"
+    r"(?P<amount>\d{1,4}|[一二两三四五六七八九十]{1,3})\s*"
+    r"(?P<unit>分钟|小时)\s*后\s*"
+    r"(?P<content>.+)"
+)
+
 
 def _duration_number(raw_value: str) -> int | None:
     """解析提醒快路径需要的小型中文整数。"""
@@ -250,7 +259,11 @@ def _try_direct_relative_reminder(
             "check_in_focus": check_in_focus,
         }
     else:
-        matched = _RELATIVE_REMINDER_PATTERN.fullmatch(normalized_text)
+        matched = _RELATIVE_REMINDER_PATTERN.fullmatch(
+            normalized_text
+        ) or _PREFIX_RELATIVE_REMINDER_PATTERN.fullmatch(
+            normalized_text
+        )
         if matched is None:
             return None
         amount = _duration_number(matched.group("amount"))

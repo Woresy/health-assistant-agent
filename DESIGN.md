@@ -2,26 +2,25 @@
 name: "HealthOS · 小满健康助手"
 description: "平静、决策优先、由用户掌控的个人健康工作台"
 colors:
-  workbench-ink: "#17382f"
-  ink-soft: "#31564b"
-  action-green: "#2f765e"
-  action-green-deep: "#225846"
-  confirmation-mint: "#dff0df"
-  next-step-lime: "#dceea8"
-  workbench-canvas: "#e9efe9"
-  workbench-surface: "#f8faf8"
-  warm-surface: "#fffdf7"
+  workbench-ink: "#17253b"
+  ink-soft: "#465267"
+  muted-text: "#707988"
+  action-blue: "#173e68"
+  action-blue-hover: "#24567e"
+  signal-coral: "#d96555"
+  signal-coral-soft: "#f9e8e3"
+  workbench-canvas: "#e7e9e7"
+  workbench-surface: "#fbfcfa"
+  secondary-surface: "#f2f4f1"
   card-white: "#ffffff"
-  secondary-surface: "#f4f7f1"
-  field-surface: "#f7f9f5"
-  divider-green: "#d6e1d8"
-  muted-text: "#53675d"
+  divider: "#d7dcd8"
+  divider-strong: "#b9c2be"
   danger-surface: "#fff3ef"
   danger-text: "#9d5547"
 typography:
   display:
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
-    fontSize: "30px"
+    fontSize: "38px"
     fontWeight: 700
     lineHeight: 1.2
     letterSpacing: "-0.025em"
@@ -39,19 +38,19 @@ typography:
     letterSpacing: "-0.015em"
   body:
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
-    fontSize: "15px"
+    fontSize: "14px"
     fontWeight: 400
     lineHeight: 1.65
     letterSpacing: "normal"
   label:
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
-    fontSize: "11px"
+    fontSize: "10px"
     fontWeight: 750
     lineHeight: 1.5
     letterSpacing: "0.08em"
 rounded:
   compact: "8px"
-  control: "10px"
+  control: "9px"
   inset: "12px"
   card: "14px"
   shell: "16px"
@@ -66,13 +65,13 @@ spacing:
   page: "34px"
 components:
   button-primary:
-    backgroundColor: "{colors.action-green}"
+    backgroundColor: "{colors.action-blue}"
     textColor: "{colors.card-white}"
     rounded: "{rounded.control}"
     padding: "9px 14px"
     height: "42px"
   button-primary-hover:
-    backgroundColor: "{colors.action-green-deep}"
+    backgroundColor: "{colors.action-blue-hover}"
     textColor: "{colors.card-white}"
     rounded: "{rounded.control}"
   button-secondary:
@@ -93,18 +92,18 @@ components:
     rounded: "{rounded.card}"
     padding: "18px"
   input:
-    backgroundColor: "{colors.field-surface}"
+    backgroundColor: "{colors.secondary-surface}"
     textColor: "{colors.workbench-ink}"
     rounded: "{rounded.control}"
   nav-item-active:
-    backgroundColor: "{colors.next-step-lime}"
-    textColor: "{colors.workbench-ink}"
+    backgroundColor: "#31425a"
+    textColor: "{colors.card-white}"
     rounded: "{rounded.control}"
     padding: "9px 12px"
     height: "40px"
   status-chip:
-    backgroundColor: "{colors.confirmation-mint}"
-    textColor: "{colors.action-green-deep}"
+    backgroundColor: "{colors.signal-coral-soft}"
+    textColor: "{colors.signal-coral}"
     typography: "{typography.label}"
     rounded: "{rounded.pill}"
     padding: "5px 8px"
@@ -116,34 +115,34 @@ components:
 
 **Creative North Star: "个人健康工作台"**
 
-HealthOS 的视觉系统像一张安静、可靠的个人工作台：冷白工作面承载事实，深墨绿结构提供方向，青绿操作色让可执行动作清楚可见。它把注意力放在“现在应判断什么、下一步做什么”，而不是把健康数据堆成令人紧张的专业仪表盘。
+HealthOS 的视觉系统像一份安静、可靠的身体观察手册：冷白纸张承载事实，午夜蓝建立结构与主操作，珊瑚色只标出需要注意的状态。它把注意力放在“现在应判断什么、下一步做什么”，而不是把健康数据堆成令人紧张的专业仪表盘。
 
 系统的气质平静、具体且有边界。信息密度可以高，但通过稳定分组、短标签、轻分隔与清楚的确认状态维持可扫描性；本地保存、写入前确认和可纠正性应在关键状态中持续可见。主要用户希望在很短时间内完成记录，因此控件保持熟悉、目标明确，不用装饰制造额外认知负担。
 
 **Key Characteristics:**
 
 - 决策优先：先突出判断、下一步与待确认动作，再提供完整证据。
-- 冷静可信：低饱和绿系、冷白表面和短促反馈避免医疗化与焦虑感。
+- 冷静可信：午夜蓝、冷白表面和短促反馈避免医疗化与焦虑感。
 - 本地可控：确认、撤销、状态和数据边界使用明确而非戏剧化的视觉语言。
 - 工作台结构：稳定的系统导航、工作面和工具组件形成连续操作环境。
 - 固定浅色：当前实现只提供浅色视觉，以避免宿主暗色继承造成局部黑底与不可读内容。
 
 ## Colors
 
-配色以深墨绿建立系统骨架，以克制青绿表达操作，以荧光感很低的黄绿色只标记当前选择或明确下一步；大面积区域保持冷白和淡灰绿。
+配色以午夜蓝建立系统骨架和主操作，以克制珊瑚色表达注意、焦点和关键状态；大面积区域保持冷白与中性灰。
 
 ### Primary
 
-- **工作台墨绿**：用于导航轨、最高层级文字和深色图标底，承担产品的结构感与可信度。
-- **行动青绿**：用于主要按钮、进度和焦点反馈；更深的行动青绿只用于悬停与强调状态。
+- **工作台午夜蓝**：用于导航轨、最高层级文字和主按钮，承担产品的结构感与可信度。
+- **行动蓝**：用于主要按钮和选中状态；较亮蓝只用于悬停与强调状态。
 
 ### Secondary
 
-- **确认薄荷绿**：用于已选择、已确认、记忆或温和状态面，不承担主操作。
+- **信号珊瑚**：只用于注意、焦点和关键状态，不承担大面积背景。
 
 ### Tertiary
 
-- **下一步青柠**：用于活动导航项和少量“下一步”提示。它的稀缺性让用户立刻找到当前任务。
+- **珊瑚柔面**：用于“下一步”和需要关注的轻量状态面，其稀缺性帮助用户快速定位。
 
 ### Neutral
 
@@ -156,7 +155,7 @@ HealthOS 的视觉系统像一张安静、可靠的个人工作台：冷白工�
 - **静音绿灰**：说明、元数据和占位文字；不要用于关键结论。
 - **绿灰分隔线**：界定容器、表格与输入，不以高对比描边包围所有内容。
 
-**The Lime Means Next Rule.** 下一步青柠只表示当前选择、直接下一步或关键方向，不用于普通装饰和大面积品牌铺色。
+**The Coral Means Attention Rule.** 珊瑚色只表示注意、焦点或关键状态，不用于普通装饰和大面积品牌铺色。
 
 **The Fixed-Light Rule.** 当前实现必须把浅色与暗色宿主 token 都映射到同一套浅色值；这是为修复浏览器或 Gradio 暗色继承导致的黑色不可读区域，不代表已实现暗色主题。
 
@@ -180,11 +179,11 @@ HealthOS 的视觉系统像一张安静、可靠的个人工作台：冷白工�
 
 ## Layout
 
-系统采用“导航轨 + 工作面”的工作台壳体。桌面端应用最大宽度为 1580px，左侧导航轨固定为 226px，右侧工作面可伸缩；内容区最大宽度为 1260px，常规页面内边距为 34px。内部布局以 8–22px 的紧凑节奏组织关联元素，以 34px 区分页面级边界。
+系统采用“导航轨 + 工作面 + 页边笔记”的三栏壳体。桌面端左侧导航固定 252px，中部工作面弹性伸缩，右侧今日摘要固定 308px，顶栏高 68px；常规页面内边距为 30–34px。内部布局以 8–22px 的紧凑节奏组织关联元素，以 34px 区分页面级边界。
 
-默认入口是“对话”，并在日常导航中排在“今天”之前。用户可直接用一句自然语言开始记录或查询；草稿留在对话中确认，确认后的事实、目标差距与汇总由“今天”承接。快捷语句必须触发真实 Agent 链路，不能只是填充输入框或作为装饰示例。
+默认入口是“今日观察”，同一工作面先呈现当天事实，再承接自然语言记录与查询；“对话”负责创建、切换和继续历史上下文。草稿留在对话中确认，确认后的事实、目标差距与汇总由今日工作面承接。快捷语句必须触发真实 Agent 链路，不能只是填充输入框或作为装饰示例。
 
-980px 以下，侧边导航转为可横向滚动的顶部导航，工作面取消视口高度约束；多列指标和判断区收拢，筛选控件允许按可用宽度换行。680px 以下，外层留白归零、页面内边距缩为 14px、卡片标题与按钮上下重排、操作标签必要时换行、双栏卡片与指标改为单列；宽表只在自身容器内横向滚动。响应式变化保持任务顺序，不隐藏记录、确认或今天状态。
+1180px 以下隐藏右侧页边笔记，并将导航收窄为 224px。720px 以下隐藏桌面侧栏，启用固定底部五个主导航和顶栏“更多”入口；页面内边距缩为 16px，多列指标改为单列，宽表只在自身容器内横向滚动。响应式变化保持任务顺序，不隐藏记录、确认或今天状态。
 
 **The Workbench Map Rule.** 系统级导航必须稳定呈现信息地图；页面内容可以变化，但不能把所有能力重新铺成无层级入口。
 

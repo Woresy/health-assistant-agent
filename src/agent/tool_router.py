@@ -478,6 +478,33 @@ class PrepareEventChangeArguments(ToolInputModel):
     def normalize_flat_payload_fields(cls, data: Any) -> Any:
         if not isinstance(data, dict) or data.get("operation") != "update":
             return data
+
+        raw_patch = data.get("patch")
+        if isinstance(raw_patch, dict) and "meal_payload" in raw_patch:
+            normalized_patch = dict(raw_patch)
+            if "payload" in normalized_patch:
+                raise ValueError(
+                    "饮食更新不能同时提供 patch.payload 和 patch.meal_payload"
+                )
+
+            meal_payload = normalized_patch.pop("meal_payload")
+            normalized_patch["payload"] = meal_payload
+
+            if (
+                "source_refs" not in normalized_patch
+                and isinstance(meal_payload, dict)
+            ):
+                nutrition = meal_payload.get("nutrition")
+                source_ref = (
+                    nutrition.get("source_ref")
+                    if isinstance(nutrition, dict)
+                    else None
+                )
+                if isinstance(source_ref, str) and source_ref.strip():
+                    normalized_patch["source_refs"] = [source_ref.strip()]
+
+            data = {**data, "patch": normalized_patch}
+
         normalized = PrepareUpdateArguments.normalize_flat_payload_fields(
             {"event_id": data.get("event_id"), "patch": data.get("patch")}
         )
@@ -560,7 +587,12 @@ TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "不要要求用户提供内部营养来源字段。",
         PrepareHealthEventArguments,
     ),
-    _definition("prepare_event_change", "生成已有记录的修改前后对比或删除草稿。", PrepareEventChangeArguments),
+    _definition(
+        "prepare_event_change",
+        "生成已有记录的修改前后对比或删除草稿。更新内容统一放在 patch；"
+        "饮食的食物或份量变化必须先重新检索并计算营养，再把完整结果放在 patch.payload。",
+        PrepareEventChangeArguments,
+    ),
     _definition("retrieve_nutrition_candidates", "检索 Top-K 标准食物候选并返回来源和分数。", NutritionCandidatesArguments),
     _definition("calculate_nutrition", "只使用选中食物数据行和克重确定性计算营养。", NutritionCalculationArguments),
     _definition("retrieve_health_knowledge", "检索带引用的一般健康知识；医疗或紧急问题拒答。", HealthKnowledgeArguments),

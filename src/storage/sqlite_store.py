@@ -19,10 +19,16 @@ from threading import RLock
 from typing import Any, Callable, Iterator
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from src.agent.models import SessionState
 from src.health.models import EventType, HealthEvent
 from src.healthos.models import HealthOSState, UserProfile
-from src.storage.conversation_store import _SESSION_ID_PATTERN
+from src.storage.conversation_store import (
+    ConversationSummary,
+    _SESSION_ID_PATTERN,
+    conversation_title,
+)
 from src.storage.healthos_store import HealthOSStore, HealthOSStoreError
 from src.storage.jsonl_store import (
     HealthEventConflictError,
@@ -515,6 +521,45 @@ class SQLiteConversationStore:
                 "DELETE FROM conversation_sessions WHERE session_id = ?", (session_id,)
             )
             connection.commit()
+
+    def list_summaries(
+        self,
+        user_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[ConversationSummary]:
+        """按最近更新时间列出指定用户的可继续会话。"""
+
+        normalized_user_id = user_id.strip()
+        if not normalized_user_id or limit <= 0:
+            return []
+        with self._lock, self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT session_id,state_json,updated_at FROM conversation_sessions "
+                "WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+                (normalized_user_id, limit),
+            ).fetchall()
+
+        summaries: list[ConversationSummary] = []
+        for row in rows:
+            try:
+                state = SessionState.model_validate_json(row["state_json"])
+                updated_at = datetime.fromisoformat(row["updated_at"])
+            except (ValueError, ValidationError):
+                continue
+            summaries.append(
+                ConversationSummary(
+                    session_id=row["session_id"],
+                    user_id=state.user_id,
+                    title=conversation_title(state),
+                    updated_at=updated_at,
+                    message_count=sum(
+                        message.role in {"user", "assistant"}
+                        for message in state.messages
+                    ),
+                )
+            )
+        return summaries
 
 
 def _digest(path: Path) -> str:

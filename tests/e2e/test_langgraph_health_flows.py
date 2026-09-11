@@ -333,6 +333,32 @@ def test_relative_reminder_does_not_wait_for_model(tmp_path: Path) -> None:
     assert confirmed.answer == "提醒已确认安排。"
 
 
+def test_remind_me_prefix_relative_reminder_does_not_wait_for_model(
+    tmp_path: Path,
+) -> None:
+    """“提醒我 2 分钟后”语序也必须走确定性的未来时间解析。"""
+
+    event_store = HealthEventStore(tmp_path / "health_events.jsonl")
+    router = HealthToolRouter(
+        event_store,
+        healthos_store=HealthOSStore(tmp_path / "healthos.json"),
+    )
+    model = FakeAgentModel([])
+    runner = LangGraphAgentRunner(model=model, router=router)
+    session = ConversationSession(
+        runner=runner,
+        session_id="direct-reminder-prefix",
+        user_id="user-1",
+    )
+
+    prepared = session.send("提醒我2分钟后喝水")
+
+    assert prepared.model_rounds == 0
+    assert prepared.pending_confirmation is not None
+    assert prepared.answer != "提醒时间必须晚于当前时间"
+    assert model.received_messages == []
+
+
 def test_active_check_in_does_not_wait_for_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -73,6 +73,10 @@ def test_sqlite_event_crud_and_conversation_persistence(tmp_path: Path) -> None:
 
     conversations.save(_session())
     assert conversations.load(SESSION_ID) == _session()
+    summaries = conversations.list_summaries("user-1")
+    assert len(summaries) == 1
+    assert summaries[0].title == "我喝了水"
+    assert conversations.list_summaries("other-user") == []
     conversations.delete(SESSION_ID)
     assert conversations.load(SESSION_ID) is None
     assert database.integrity_check()["ok"] is True
