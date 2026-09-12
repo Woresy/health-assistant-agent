@@ -16,6 +16,7 @@ tests
 docs
 scripts/*
 !scripts/backup_sqlite.py
+!scripts/prepare_health_knowledge_model.py
 package.json
 package-lock.json
 data/index-before-semantic-hints
