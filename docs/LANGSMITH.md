@@ -32,10 +32,28 @@ LangSmith Cloud 的 `LANGSMITH_ENDPOINT` 不要追加 `/v1`。美国区通常可
 节点耗时、错误和模型元数据，但看不到用户的饮食、体重、提醒文本或模型回答。
 只有在取得用户明确授权并完成数据治理后，才考虑关闭隐藏开关。
 
-## 3. 启动并验证
+## 3. 自动往返验证
+
+只发送纯合成数据，并验证远程 Trace 可读、必要标签存在、原始输入和输出均未上传：
 
 ```bash
-python app.py
+.venv/bin/python scripts/verify_langsmith.py
+```
+
+报告写入 `artifacts/langsmith-verification/report.json`（本地诊断产物，不提交）。成功
+必须同时满足：本地输出契约、远程写入后读取、输入隐藏、输出隐藏和标签完整五项。
+该验证不会发送真实饮食、体重、提醒或对话内容。
+
+## 4. 启动应用并人工检查
+
+如需同时查看页面内的开发证据，先在 `.env` 中设置：
+
+```dotenv
+HEALTHOS_SHOW_DEVELOPER_UI=true
+```
+
+```bash
+.venv/bin/python app.py
 ```
 
 页面的 Provider 状态应包含：
@@ -49,7 +67,7 @@ LangSmith 已启用：health-assistant-agent-local；输入输出已隐藏
 `HealthOS Agent Model`，对话、确认和取消分别显示为脱敏的顶层运行。`Threads` 页面使用不可逆摘要后的 thread ID 聚合多轮对话，
 不会上传浏览器本地会话 ID。
 
-## 4. 优化建议
+## 5. 优化建议
 
 优先建立以下筛选或 Dashboard：
 

@@ -16,6 +16,7 @@ ENV/
 htmlcov/
 coverage.xml
 artifacts/rag-reproduction/
+artifacts/langsmith-verification/
 node_modules/
 test-results/
 playwright-report/
@@ -58,3 +59,10 @@ data/healthos.db-wal
 # Local temporary files
 *.tmp
 *.temp
+
+# Local UI review screenshots
+.impeccable/review/
+
+# Local interview handbook exports
+docs/健康助理Agent项目面试全景手册.*
+docs/面试手册-pdf.css

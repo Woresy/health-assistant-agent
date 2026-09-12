@@ -18,3 +18,9 @@
 {"case_id":"knowledge_018","question":"成年人每天睡多久？","expected_document_ids":["cdc-sleep-2024"]}
 {"case_id":"knowledge_019","question":"量子计算机如何纠错？","expected_document_ids":[]}
 {"case_id":"knowledge_020","question":"股票短线交易该买哪只？","expected_document_ids":[]}
+{"case_id":"semantic_021","question":"上班一天都坐着，怎么让身体动起来？","expected_document_ids":["who-physical-activity-2024"]}
+{"case_id":"semantic_022","question":"抗阻锻炼一周安排几次？","expected_document_ids":["cdc-adult-activity-2023"]}
+{"case_id":"semantic_023","question":"日常吃饭怎样搭配才不容易偏科？","expected_document_ids":["who-healthy-diet-2026"]}
+{"case_id":"semantic_024","question":"外卖口味太重，平时可以怎么调整？","expected_document_ids":["who-sodium-reduction-2026"]}
+{"case_id":"semantic_025","question":"运动后口渴时喝什么更合适？","expected_document_ids":["cdc-water-healthier-drinks-2026"]}
+{"case_id":"semantic_026","question":"每天只睡六小时够吗？","expected_document_ids":["cdc-sleep-2024"]}

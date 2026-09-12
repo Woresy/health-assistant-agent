@@ -68,7 +68,10 @@ def _parse_datetime(value: str, timezone_name: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError as exc:
-        raise ValueError("时间必须使用 ISO 8601 格式") from exc
+        raise ValueError(
+            "请直接说明提醒时间，例如“每天晚上 11 点”"
+            "或“2 分钟后”"
+        ) from exc
     try:
         active_timezone = ZoneInfo(timezone_name)
     except (ZoneInfoNotFoundError, ValueError) as exc:
@@ -81,6 +84,13 @@ def _parse_datetime(value: str, timezone_name: str) -> datetime:
 _RELATIVE_REMINDER_TIME = re.compile(
     r"^(?P<amount>\d{1,4}|[一二两三四五六七八九十]{1,3})\s*"
     r"(?P<unit>分钟|小时)\s*后$"
+)
+
+_NATURAL_REMINDER_TIME = re.compile(
+    r"^(?P<day>今天|明天|后天|每天|工作日)?\s*"
+    r"(?P<period>凌晨|早上|上午|中午|下午|傍晚|晚上)?\s*"
+    r"(?P<hour>\d{1,2}|[一二两三四五六七八九十]{1,3})\s*[点时]"
+    r"(?:(?P<minute>\d{1,2})\s*分?|(?P<half>半))?$"
 )
 
 
@@ -115,25 +125,52 @@ def _relative_time_amount(raw_value: str) -> int | None:
 
 
 def _parse_reminder_datetime(value: str, timezone_name: str) -> datetime:
-    """提醒时间既接受 ISO 时间，也接受受控的相对时长。"""
+    """提醒时间接受程序时间、相对时长和常见中文说法。"""
 
     normalized = value.strip()
     relative_match = _RELATIVE_REMINDER_TIME.fullmatch(normalized)
-    if relative_match is None:
-        return _parse_datetime(normalized, timezone_name)
-    amount = _relative_time_amount(relative_match.group("amount"))
-    if amount is None:
-        raise ValueError("相对提醒时间必须大于 0")
     try:
         active_timezone = ZoneInfo(timezone_name)
     except (ZoneInfoNotFoundError, ValueError) as exc:
-        raise ValueError(f"无法加载时区：{timezone_name}") from exc
-    delta = (
-        timedelta(minutes=amount)
-        if relative_match.group("unit") == "分钟"
-        else timedelta(hours=amount)
+        raise ValueError("暂时无法确定提醒所在的时区") from exc
+    now = datetime.now(active_timezone)
+
+    if relative_match is not None:
+        amount = _relative_time_amount(relative_match.group("amount"))
+        if amount is None:
+            raise ValueError("请输入大于 0 的提前时长")
+        delta = (
+            timedelta(minutes=amount)
+            if relative_match.group("unit") == "分钟"
+            else timedelta(hours=amount)
+        )
+        return (now + delta).replace(microsecond=0)
+
+    natural_match = _NATURAL_REMINDER_TIME.fullmatch(normalized)
+    if natural_match is None:
+        return _parse_datetime(normalized, timezone_name)
+    hour = _relative_time_amount(natural_match.group("hour"))
+    minute = 30 if natural_match.group("half") else int(
+        natural_match.group("minute") or 0
     )
-    return (datetime.now(active_timezone) + delta).replace(microsecond=0)
+    if hour is None or hour > 23 or minute > 59:
+        raise ValueError("这个提醒时间无法识别，请换一种日常说法")
+    period = natural_match.group("period") or ""
+    if period in {"下午", "傍晚", "晚上"} and hour < 12:
+        hour += 12
+    elif period == "凌晨" and hour == 12:
+        hour = 0
+    day_text = natural_match.group("day") or ""
+    day_offset = {"明天": 1, "后天": 2}.get(day_text, 0)
+    scheduled = (now + timedelta(days=day_offset)).replace(
+        hour=hour,
+        minute=minute,
+        second=0,
+        microsecond=0,
+    )
+    if scheduled <= now and day_text in {"", "每天", "工作日"}:
+        scheduled += timedelta(days=1)
+    return scheduled
 
 
 def _draft(
@@ -428,6 +465,12 @@ def retrieve_health_knowledge(*, question: str, top_k: int = 3) -> dict[str, Any
             "answer_scope": "一般健康生活信息，不是医疗建议",
             "citations": matches,
             "count": len(matches),
+            "retrieval": {
+                **repository.retrieval_receipt(),
+                "top_k": top_k,
+                "returned_count": len(matches),
+                "strategies_used": matches[0]["strategies_used"],
+            },
         }
     )
 
@@ -577,44 +620,44 @@ def get_period_summary(
 def create_reminder_draft(
     *, user_id: str, content: str, scheduled_for: str, timezone_name: str,
     idempotency_key: str, store: HealthOSStore,
-    delivery_channel: str = "local",
+    delivery_channel: str = "feishu",
     reminder_type: str = "standard",
     recurrence: str = "once",
     check_in_focus: list[str] | None = None,
 ) -> dict[str, Any]:
-    """生成本地或飞书提醒草稿，不立即安排或发送。"""
+    """生成飞书提醒草稿，不立即安排或发送。"""
 
     try:
         normalized_channel = delivery_channel.strip().lower()
-        if normalized_channel not in {"local", "feishu"}:
-            return _failure("REMINDER_CHANNEL_INVALID", "提醒渠道只能选择本地或飞书")
+        if normalized_channel != "feishu":
+            return _failure("REMINDER_CHANNEL_INVALID", "目前所有提醒都通过飞书发送")
         normalized_type = reminder_type.strip().lower()
         normalized_recurrence = recurrence.strip().lower()
         if normalized_type not in {"standard", "check_in"}:
-            return _failure("REMINDER_TYPE_INVALID", "提醒类型只能是普通提醒或主动 check-in")
+            return _failure("REMINDER_TYPE_INVALID", "提醒类型只能是普通提醒或主动问候")
         if normalized_recurrence not in {"once", "daily", "weekdays"}:
             return _failure("REMINDER_RECURRENCE_INVALID", "提醒频率只能是单次、每天或工作日")
-        if normalized_type == "check_in" and normalized_channel != "feishu":
-            return _failure("CHECK_IN_CHANNEL_INVALID", "主动 check-in 需要选择飞书接收位置")
         if normalized_type == "check_in" and normalized_recurrence == "once":
-            return _failure("CHECK_IN_RECURRENCE_INVALID", "主动 check-in 需要选择每天或工作日")
+            return _failure("CHECK_IN_RECURRENCE_INVALID", "主动问候需要选择每天或工作日")
         normalized_focus = list(dict.fromkeys(check_in_focus or ["meal", "water", "exercise"]))
         if any(item not in {"meal", "water", "exercise", "weight"} for item in normalized_focus):
-            return _failure("CHECK_IN_FOCUS_INVALID", "主动 check-in 只能关注饮食、饮水、运动或体重")
-        destination_label = "本地提醒中心"
-        destination_key = "local"
-        if normalized_channel == "feishu":
-            feishu_config = FeishuWebhookConfig.from_environment()
-            if not feishu_config.available:
-                return _failure(
-                    "REMINDER_PROVIDER_UNAVAILABLE",
-                    "飞书机器人尚未配置，请先在本机环境变量中启用并填写 Webhook",
-                )
-            destination_label = feishu_config.destination_label
-            destination_key = feishu_config.destination_key
+            return _failure("CHECK_IN_FOCUS_INVALID", "主动问候只能关注饮食、饮水、运动或体重")
+        feishu_config = FeishuWebhookConfig.from_environment()
+        if not feishu_config.available:
+            return _failure(
+                "REMINDER_PROVIDER_UNAVAILABLE",
+                "飞书提醒尚未连接，暂时不能创建提醒。"
+                "请先在应用配置中连接飞书机器人。",
+            )
+        destination_label = feishu_config.destination_label
+        destination_key = feishu_config.destination_key
         profile = store.get_profile(user_id, timezone_name)
         if not profile.reminders_enabled:
             return _failure("REMINDERS_DISABLED", "提醒已关闭，请先在档案中开启")
+        if scheduled_for.strip().startswith("每天"):
+            normalized_recurrence = "daily"
+        elif scheduled_for.strip().startswith("工作日"):
+            normalized_recurrence = "weekdays"
         scheduled = _parse_reminder_datetime(scheduled_for, profile.timezone_name)
         if scheduled <= datetime.now(timezone.utc).astimezone(scheduled.tzinfo):
             return _failure("REMINDER_TIME_PAST", "提醒时间必须晚于当前时间")
@@ -693,12 +736,12 @@ def _execute_healthos_draft(
                     content=payload["content"],
                     scheduled_for=scheduled,
                     timezone_name=payload["timezone_name"],
-                    delivery_channel=payload.get("delivery_channel", "local"),
+                    delivery_channel=payload.get("delivery_channel", "feishu"),
                     reminder_type=payload.get("reminder_type", "standard"),
                     recurrence=payload.get("recurrence", "once"),
                     check_in_focus=payload.get("check_in_focus", []),
-                    destination_label=payload.get("destination_label", "本地提醒中心"),
-                    destination_key=payload.get("destination_key", "local"),
+                    destination_label=payload.get("destination_label", "飞书"),
+                    destination_key=payload.get("destination_key", "feishu"),
                     status=ReminderStatus.SCHEDULED,
                     created_at=now,
                     updated_at=now,
@@ -717,18 +760,37 @@ def _execute_healthos_draft(
                     "resume": ReminderStatus.SCHEDULED,
                     "snooze": ReminderStatus.SNOOZED,
                 }
-                next_status = status_map[operation]
+                next_status = status_map.get(operation, current.status)
                 scheduled_for = current.scheduled_for
-                if operation == "snooze":
+                if operation in {"snooze", "update"} and payload.get(
+                    "scheduled_for"
+                ):
                     scheduled_for = _parse_datetime(payload["scheduled_for"], current.timezone_name)
-                transition = ReminderTransition(status=next_status, occurred_at=now, reason=payload.get("reason") or f"用户{operation}")
+                transition = ReminderTransition(
+                    status=next_status,
+                    occurred_at=now,
+                    reason=payload.get("reason") or f"用户{operation}",
+                )
+                reminder_updates: dict[str, Any] = {
+                    "status": next_status,
+                    "scheduled_for": scheduled_for,
+                    "updated_at": now,
+                    "transitions": [*current.transitions, transition],
+                }
+                if operation == "update":
+                    reminder_updates.update(
+                        {
+                            "content": payload.get("content", current.content),
+                            "recurrence": payload.get(
+                                "recurrence", current.recurrence
+                            ),
+                            "delivery_channel": "feishu",
+                            "destination_label": payload["destination_label"],
+                            "destination_key": payload["destination_key"],
+                        }
+                    )
                 updated = current.model_copy(
-                    update={
-                        "status": next_status,
-                        "scheduled_for": scheduled_for,
-                        "updated_at": now,
-                        "transitions": [*current.transitions, transition],
-                    }
+                    update=reminder_updates
                 )
                 state.reminders[index] = updated
                 result = {"action": action, "reminder": updated.model_dump(mode="json")}
@@ -766,36 +828,86 @@ def execute_reminder(
 def list_or_cancel_reminders(
     *, user_id: str, action: str, store: HealthOSStore, idempotency_key: str,
     reminder_id: str | None = None, scheduled_for: str | None = None,
+    content: str | None = None, recurrence: str | None = None,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    """查看提醒；取消、延后、暂停或恢复时只生成草稿。"""
+    """查看提醒；修改或改变状态时只生成草稿。"""
 
     normalized_action = action.strip().lower()
     if normalized_action == "list":
         try:
-            reminders = [item for item in store.read().reminders if item.user_id == user_id]
+            reminders = [
+                item
+                for item in store.read().reminders
+                if item.user_id == user_id
+                and item.delivery_channel == "feishu"
+            ]
         except HealthOSStoreError as exc:
             return _failure("STORE_ERROR", str(exc))
         reminders.sort(key=lambda item: (item.scheduled_for, str(item.reminder_id)))
         return _ok({"reminders": [item.model_dump(mode="json") for item in reminders], "count": len(reminders)})
-    if normalized_action not in {"cancel", "snooze", "pause", "resume"}:
-        return _failure("REMINDER_OPERATION_INVALID", "提醒操作必须是 list、cancel、snooze、pause 或 resume")
+    if normalized_action not in {"update", "cancel", "snooze", "pause", "resume"}:
+        return _failure(
+            "REMINDER_OPERATION_INVALID",
+            "这个提醒操作暂不支持，可以修改、取消、延后、暂停或恢复",
+        )
     if not reminder_id:
         return _failure("REMINDER_ID_REQUIRED", "请先选择要操作的提醒")
     if normalized_action == "snooze" and not scheduled_for:
         return _failure("REMINDER_TIME_REQUIRED", "延后提醒需要新的时间")
+    if normalized_action == "update" and not any(
+        value is not None for value in (content, scheduled_for, recurrence)
+    ):
+        return _failure(
+            "REMINDER_UPDATE_REQUIRED",
+            "请说明想修改提醒的内容、时间或频率",
+        )
     try:
         state = store.read()
         index = store.find_reminder_index(state, user_id, UUID(reminder_id))
         current = state.reminders[index]
         if current.status in {ReminderStatus.CANCELLED, ReminderStatus.COMPLETED}:
             return _failure("REMINDER_FINAL_STATE", "这条提醒已经结束，不能再次修改")
+        normalized_scheduled = scheduled_for
+        if scheduled_for:
+            parsed_scheduled = _parse_reminder_datetime(
+                scheduled_for, current.timezone_name
+            )
+            if parsed_scheduled <= datetime.now(parsed_scheduled.tzinfo):
+                return _failure(
+                    "REMINDER_TIME_PAST", "提醒时间需要晚于现在"
+                )
+            normalized_scheduled = parsed_scheduled.isoformat()
+        if recurrence not in {None, "once", "daily", "weekdays"}:
+            return _failure(
+                "REMINDER_RECURRENCE_INVALID",
+                "提醒频率可以设为单次、每天或工作日",
+            )
+        if content is not None and not content.strip():
+            return _failure("REMINDER_CONTENT_INVALID", "提醒内容不能为空")
         payload = {
             "operation": normalized_action,
             "reminder_id": reminder_id,
-            "scheduled_for": scheduled_for,
+            "scheduled_for": normalized_scheduled,
             "reason": reason or f"用户{normalized_action}",
         }
+        if normalized_action == "update":
+            feishu_config = FeishuWebhookConfig.from_environment()
+            if not feishu_config.available:
+                return _failure(
+                    "REMINDER_PROVIDER_UNAVAILABLE",
+                    "飞书提醒尚未连接，暂时不能修改提醒。"
+                    "请先在应用配置中连接飞书机器人。",
+                )
+            payload.update(
+                {
+                    "content": content.strip() if content is not None else current.content,
+                    "scheduled_for": normalized_scheduled or current.scheduled_for.isoformat(),
+                    "recurrence": recurrence or current.recurrence,
+                    "destination_label": feishu_config.destination_label,
+                    "destination_key": feishu_config.destination_key,
+                }
+            )
     except (ValueError, HealthOSStoreError) as exc:
         return _failure("VALIDATION_ERROR", str(exc))
     return _draft(
@@ -803,7 +915,25 @@ def list_or_cancel_reminders(
         user_id=user_id,
         payload=payload,
         idempotency_key=idempotency_key,
-        preview={"before": current.model_dump(mode="json"), "operation": normalized_action, "scheduled_for": scheduled_for},
+        preview={
+            "before": current.model_dump(mode="json"),
+            "after": {
+                **current.model_dump(mode="json"),
+                **(
+                    {
+                        "content": payload["content"],
+                        "scheduled_for": payload["scheduled_for"],
+                        "recurrence": payload["recurrence"],
+                        "delivery_channel": "feishu",
+                        "destination_label": payload["destination_label"],
+                    }
+                    if normalized_action == "update"
+                    else {}
+                ),
+            },
+            "operation": normalized_action,
+            "scheduled_for": normalized_scheduled,
+        },
     )
 
 

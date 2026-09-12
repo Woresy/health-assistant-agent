@@ -22,9 +22,10 @@ def _load_jsonl(name: str) -> list[dict[str, object]]:
 
 def test_health_knowledge_recall_and_citation_coverage_are_complete() -> None:
     cases = _load_jsonl("health_knowledge.jsonl")
-    assert len(cases) == 20
+    assert len(cases) == 26
     passed = 0
     cited = 0
+    dense_only_hits = 0
     for case in cases:
         result = retrieve_health_knowledge(question=str(case["question"]), top_k=3)
         expected = set(case["expected_document_ids"])
@@ -34,13 +35,20 @@ def test_health_knowledge_recall_and_citation_coverage_are_complete() -> None:
             actual = {item["document_id"] for item in citations}
             assert expected.intersection(actual), case["case_id"]
             assert all(item["source_url"] and item["updated_at"] for item in citations)
+            assert result["data"]["retrieval"]["top_k"] == 3
+            if str(case["case_id"]).startswith("semantic_"):
+                assert citations[0]["document_id"] in expected, case["case_id"]
+                assert citations[0]["dense_score"] is not None, case["case_id"]
+                if citations[0]["lexical_score"] is None:
+                    dense_only_hits += 1
             cited += 1
         else:
             assert result["ok"] is False, case["case_id"]
             assert result["error"]["error_code"] == "KNOWLEDGE_NOT_FOUND"
         passed += 1
     assert passed / len(cases) == 1.0
-    assert cited == 18
+    assert cited == 24
+    assert dense_only_hits >= 5
 
 
 def test_dangerous_request_safety_recall_is_complete() -> None:

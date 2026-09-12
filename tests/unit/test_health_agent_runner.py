@@ -131,6 +131,106 @@ def _meal_payload() -> MealPayload:
     )
 
 
+def test_agent_runner_recovers_when_model_requests_multiple_tools(
+    tmp_path: Path,
+) -> None:
+    model = FakeAgentModel(
+        [
+            AgentModelReply(
+                tool_calls=(
+                    ModelToolCall(
+                        call_id="daily-parallel",
+                        name="get_daily_summary",
+                        arguments={"date": "2026-09-12"},
+                    ),
+                    ModelToolCall(
+                        call_id="knowledge-parallel",
+                        name="retrieve_health_knowledge",
+                        arguments={"question": "午餐怎么搭配更均衡"},
+                    ),
+                )
+            ),
+            AgentModelReply(
+                tool_calls=(
+                    ModelToolCall(
+                        call_id="daily-sequential",
+                        name="get_daily_summary",
+                        arguments={"date": "2026-09-12"},
+                    ),
+                )
+            ),
+            AgentModelReply(
+                tool_calls=(
+                    ModelToolCall(
+                        call_id="knowledge-sequential",
+                        name="retrieve_health_knowledge",
+                        arguments={"question": "午餐怎么搭配更均衡"},
+                    ),
+                )
+            ),
+            AgentModelReply(
+                content="午餐可以在主食外加一份蛋白质和一份蔬菜。"
+            ),
+        ]
+    )
+    runner = AgentRunner(
+        model=model,
+        router=HealthToolRouter(
+            HealthEventStore(tmp_path / "parallel-events.jsonl")
+        ),
+        max_model_rounds=4,
+    )
+    session = ConversationSession(
+        runner=runner,
+        session_id="parallel-tools",
+        user_id="user-1",
+        timezone_name="Asia/Shanghai",
+    )
+
+    result = session.send("那午餐应该怎么搭配？")
+
+    assert result.state.value == "completed"
+    assert [step.tool_name for step in result.tool_steps] == [
+        "get_daily_summary",
+        "retrieve_health_knowledge",
+    ]
+    assert "一次模型响应只能" not in result.answer
+    assert any(
+        "请一次只选择一个工具" in message.content
+        for message in model.received_messages[1]
+    )
+
+
+def test_agent_answer_hides_internal_food_catalog_identifiers(
+    tmp_path: Path,
+) -> None:
+    model = FakeAgentModel(
+        [
+            AgentModelReply(
+                content=(
+                    "食物库里最接近的是米饭（FOOD_002），"
+                    "你可以确认后继续。"
+                )
+            )
+        ]
+    )
+    session = ConversationSession(
+        runner=AgentRunner(
+            model=model,
+            router=HealthToolRouter(
+                HealthEventStore(tmp_path / "food-id-events.jsonl")
+            ),
+        ),
+        session_id="food-id-answer",
+        user_id="user-1",
+    )
+
+    result = session.send("请继续")
+
+    assert "FOOD_" not in result.answer
+    assert "米饭" in result.answer
+
+
 @pytest.mark.parametrize(
     (
         "event_input",

@@ -537,7 +537,7 @@ class ReminderDraftArguments(ToolInputModel):
     content: str = Field(min_length=1, max_length=300)
     scheduled_for: str
     timezone_name: str | None = None
-    delivery_channel: Literal["local", "feishu"] = "local"
+    delivery_channel: Literal["feishu"] = "feishu"
     reminder_type: Literal["standard", "check_in"] = "standard"
     recurrence: Literal["once", "daily", "weekdays"] = "once"
     check_in_focus: list[Literal["meal", "water", "exercise", "weight"]] = Field(
@@ -553,9 +553,11 @@ class ExecuteReminderArguments(ToolInputModel):
 
 
 class ReminderListOrChangeArguments(ToolInputModel):
-    action: Literal["list", "cancel", "snooze", "pause", "resume"] = "list"
+    action: Literal["list", "update", "cancel", "snooze", "pause", "resume"] = "list"
     reminder_id: str | None = None
+    content: str | None = Field(default=None, min_length=1, max_length=300)
     scheduled_for: str | None = None
+    recurrence: Literal["once", "daily", "weekdays"] | None = None
     reason: str | None = Field(default=None, max_length=500)
 
 
@@ -598,9 +600,9 @@ TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     _definition("retrieve_health_knowledge", "检索带引用的一般健康知识；医疗或紧急问题拒答。", HealthKnowledgeArguments),
     _definition("get_daily_summary", "从已保存事实汇总指定日期并展示数据完整度。", DailySummaryArguments),
     _definition("get_period_summary", "汇总 7、14 或 30 天趋势事实；不推断原因。", PeriodSummaryArguments),
-    _definition("create_reminder_draft", "生成普通提醒或主动 check-in 草稿，展示发送渠道、目的地、内容、时间、频率和影响范围。", ReminderDraftArguments),
+    _definition("create_reminder_draft", "生成飞书普通提醒或主动 check-in 草稿，展示接收位置、内容、时间、频率和影响范围。", ReminderDraftArguments),
     _definition("execute_reminder", "仅凭有效确认令牌和幂等键执行提醒草稿。", ExecuteReminderArguments),
-    _definition("list_or_cancel_reminders", "查看提醒；取消、延后、暂停或恢复时生成待确认草稿。", ReminderListOrChangeArguments),
+    _definition("list_or_cancel_reminders", "查看提醒；修改内容、时间或频率，以及取消、延后、暂停或恢复时生成待确认草稿。", ReminderListOrChangeArguments),
 )
 
 TOOL_CONTRACTS: dict[str, dict[str, Any]] = {

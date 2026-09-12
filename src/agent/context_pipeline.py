@@ -8,6 +8,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+from src.agent.conversation_scenarios import (
+    ConversationScenario,
+    detect_conversation_scenario,
+)
 from src.agent.models import AgentMessage, PendingTask
 
 
@@ -21,6 +25,7 @@ class PromptContext:
     goals: tuple[dict[str, Any], ...]
     pending_task: PendingTask | None
     verified_tool_names: tuple[str, ...]
+    conversation_scenario: ConversationScenario | None
 
     @property
     def layer_receipt(self) -> tuple[dict[str, str], ...]:
@@ -57,8 +62,15 @@ class PromptContext:
             missing = "、".join(self.pending_task.missing_parameters)
             pending_text = f"等待补充：{missing}；目标工具：{self.pending_task.tool_name}"
         verified = "、".join(self.verified_tool_names) or "暂无；不得把模型猜测当作事实"
+        scenario_text = (
+            self.conversation_scenario.render()
+            if self.conversation_scenario is not None
+            else "当前业务场景：通用健康对话；遵守基础工具与安全规则。"
+        )
         return (
             self.system_rules
+            + "\n\n[连续对话场景]\n"
+            + scenario_text
             + "\n\n[Prompt Context Pipeline]\n"
             + "第 1 层｜系统规则：以上规则具有最高优先级。\n"
             + "第 2 层｜本轮用户输入：作为独立 user message 提供，不在此重复。\n"
@@ -105,5 +117,9 @@ def build_prompt_context(
                 for message in current_turn_messages
                 if message.role == "tool" and message.tool_name
             )
+        ),
+        conversation_scenario=detect_conversation_scenario(
+            user_input,
+            messages,
         ),
     )

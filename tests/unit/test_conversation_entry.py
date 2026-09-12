@@ -20,15 +20,16 @@ from src.ui.app import begin_agent_activity, build_demo, finish_agent_activity
 active_process = begin_agent_activity("我今天喝了多少水", {})
 assert active_process.value.count("<li") == 3
 assert "小满正在处理" in active_process.value
-assert "不包含模型内部思维链" in active_process.value
+assert "完成后会告诉你结果" in active_process.value
 
 finished_process = finish_agent_activity(
     "本轮操作已完成。",
     [{"tool": "query_health_events", "status": "成功", "source": "本地 SQLite 业务数据"}],
 )
-assert "处理过程" in finished_process.value
+assert "本次处理" in finished_process.value
 assert "读取已确认的健康记录" in finished_process.value
-assert "本地 SQLite 业务数据 · 成功" in finished_process.value
+assert "成功" in finished_process.value
+assert "SQLite" not in finished_process.value
 
 config = build_demo().get_config_file()
 components = config["components"]
@@ -38,6 +39,13 @@ main_tabs = next(
     if component.get("props", {}).get("elem_id") == "main-tabs"
 )
 assert main_tabs["props"]["selected"] == "chat"
+
+developer_tab = next(
+    component
+    for component in components
+    if component.get("props", {}).get("elem_id") == "healthos-evidence"
+)
+assert developer_tab["props"]["visible"] is False
 
 starter_layout = next(
     component
@@ -84,6 +92,7 @@ assert starter_button_ids <= triggered_ids
 '''
     environment = os.environ.copy()
     environment["RAG_MODE"] = "lexical"
+    environment["HEALTHOS_SHOW_DEVELOPER_UI"] = "false"
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=PROJECT_ROOT,

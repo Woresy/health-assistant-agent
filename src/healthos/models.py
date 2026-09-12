@@ -219,14 +219,14 @@ class ReminderTransition(HealthOSModel):
 
 
 class Reminder(HealthOSModel):
-    """本地模拟 Provider 中的一条提醒。"""
+    """一条经用户确认的提醒。"""
 
     reminder_id: UUID
     user_id: str = Field(min_length=1, max_length=128)
     content: str = Field(min_length=1, max_length=300)
     scheduled_for: datetime
     timezone_name: str = Field(min_length=1, max_length=100)
-    delivery_channel: Literal["local", "feishu"] = "local"
+    delivery_channel: Literal["local", "feishu"] = "feishu"
     reminder_type: Literal["standard", "check_in"] = "standard"
     recurrence: Literal["once", "daily", "weekdays"] = "once"
     check_in_focus: list[Literal["meal", "water", "exercise", "weight"]] = Field(
@@ -234,11 +234,11 @@ class Reminder(HealthOSModel):
         max_length=4,
     )
     destination_label: str = Field(
-        default="本地提醒中心",
+        default="飞书",
         min_length=1,
         max_length=120,
     )
-    destination_key: str = Field(default="local", min_length=1, max_length=128)
+    destination_key: str = Field(default="feishu", min_length=1, max_length=128)
     delivery_attempts: int = Field(default=0, ge=0)
     last_delivery_at: datetime | None = None
     last_delivery_error: str | None = Field(default=None, max_length=500)

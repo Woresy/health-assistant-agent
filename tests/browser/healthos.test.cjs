@@ -187,7 +187,7 @@ test("desktop: history restores and a daily record opens its edit conversation",
     console.error(serverOutput);
     throw error;
   }
-  const processSummary = page.locator("details.agent-process summary").filter({ hasText: "处理过程" });
+  const processSummary = page.locator("details.agent-process summary").filter({ hasText: "本次处理" });
   await processSummary.waitFor();
   await processSummary.click();
   await page.getByText("理解你的请求与当前对话", { exact: true }).waitFor();
@@ -206,12 +206,39 @@ test("desktop: history restores and a daily record opens its edit conversation",
     fs.mkdirSync(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "desktop.png"), fullPage: false });
   }
+  await openNavigation(page, "今日完整汇总");
   const waterRecord = page.getByRole("button", { name: "水 350 ml", exact: true });
   await waterRecord.waitFor();
   await waterRecord.click();
   await page.getByText("正在修改").waitFor();
   assert.equal(await page.locator("#healthos-record").isVisible(), true);
   assert.equal(await page.getByPlaceholder("直接说：我刚喝了水").inputValue(), "请把这条记录修改为：");
+  await context.close();
+});
+
+test("desktop: a short user message stays on one line in a comfortably wide bubble", async () => {
+  const { context, page } = await openApp({ width: 1440, height: 1000 });
+  const input = page.getByPlaceholder("直接说：我刚喝了水");
+  const messageText = "每天晚上9点提醒我拉伸";
+  await input.fill(messageText);
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  const message = page.locator("#health-chat").getByText(messageText, { exact: true });
+  await message.waitFor();
+  const metrics = await message.evaluate((element) => {
+    const bubble = element.closest(".message") || element;
+    const textStyle = getComputedStyle(element);
+    return {
+      bubbleWidth: bubble.getBoundingClientRect().width,
+      lineHeight: Number.parseFloat(textStyle.lineHeight),
+      textHeight: element.getBoundingClientRect().height,
+    };
+  });
+  assert.ok(metrics.bubbleWidth >= 240, JSON.stringify(metrics));
+  assert.ok(metrics.textHeight <= metrics.lineHeight * 1.25, JSON.stringify(metrics));
+  if (screenshotDirectory) {
+    fs.mkdirSync(screenshotDirectory, { recursive: true });
+    await page.screenshot({ path: path.join(screenshotDirectory, "chat-bubble-desktop.png"), fullPage: false });
+  }
   await context.close();
 });
 
@@ -314,6 +341,44 @@ test("desktop: new conversations preserve and reopen real history", async () => 
   await context.close();
 });
 
+test("desktop: current recent conversation returns from reminders to chat", async () => {
+  const { context, page } = await openApp({ width: 1440, height: 1000 });
+  const input = page.getByPlaceholder("直接说：我刚喝了水");
+  await page.getByRole("button", { name: /创建新对话/ }).first().click();
+  await input.fill("导航回对话验收");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await page.getByText("浏览器测试回复：消息已收到。").waitFor();
+  const currentConversation = page.locator(
+    "#sidebar-conversations label:has(input:checked)",
+  );
+  await currentConversation.waitFor();
+
+  await openNavigation(page, "提醒");
+  assert.equal(await page.locator("#healthos-reminders").isVisible(), true);
+  await currentConversation.click();
+
+  await page.locator("#healthos-record:visible").waitFor();
+  assert.equal(await page.locator("#healthos-reminders").isVisible(), false);
+  await context.close();
+});
+
+test("desktop: confirmed records live in the right rail and reminders do not use a wide table", async () => {
+  const { context, page } = await openApp({ width: 1440, height: 1000 });
+
+  assert.equal(await page.locator("#healthos-record .today-rhythm-panel").count(), 0);
+  await page.locator("#healthos-margin").getByText("今日已确认记录", { exact: true }).waitFor();
+  await page.locator("#healthos-margin").getByText("水 350 ml", { exact: true }).waitFor();
+
+  await openNavigation(page, "提醒");
+  assert.equal(await page.locator("#healthos-reminders table").count(), 0);
+  assert.equal(await page.getByText("本地提醒中心", { exact: true }).count(), 0);
+  if (screenshotDirectory) {
+    fs.mkdirSync(screenshotDirectory, { recursive: true });
+    await page.screenshot({ path: path.join(screenshotDirectory, "reminders-list-desktop.png"), fullPage: false });
+  }
+  await context.close();
+});
+
 test("desktop: meal images open a real review flow inside the conversation", async () => {
   const { context, page } = await openApp({ width: 1440, height: 1000 });
   assert.equal(
@@ -327,19 +392,23 @@ test("desktop: meal images open a real review flow inside the conversation", asy
     page.getByRole("button", { name: "添加图片", exact: true }).click(),
   ]);
   await fileChooser.setFiles(path.join(projectRoot, "tests/fixtures/meal.png"));
-  await page.getByText("核对这张餐食图片", { exact: true }).waitFor();
+  await page.getByText("确认餐食信息", { exact: true }).waitFor();
   await page.getByLabel("食物名称").fill("米饭");
   await page.getByLabel("估计份量（g）").fill("150");
-  await page.getByRole("button", { name: "查找可靠候选", exact: true }).click();
-  await page.getByText(/已加载 \d+ 个候选/).waitFor();
-  const candidate = page.getByLabel("确认食物候选");
+  await page.getByRole("button", { name: "匹配食物", exact: true }).click();
+  await page.getByText(/最接近的食物|几种相近的食物/).waitFor();
+  const candidate = page.getByLabel("选择最接近的食物");
   if (!(await candidate.inputValue()).trim()) {
     await candidate.click();
     await page.getByRole("option").filter({ hasText: /米饭/ }).first().click();
   }
-  await page.getByRole("button", { name: "生成营养估算", exact: true }).click();
+  assert.equal(await page.locator(".candidate-table").count(), 0);
+  assert.equal(await page.getByText("查看候选检索证据", { exact: true }).count(), 0);
+  assert.doesNotMatch(await page.locator("body").innerText(), /stage\s+\d|food_id|match_type/);
+  await page.getByRole("button", { name: "查看营养估算", exact: true }).click();
   await page.getByText("待确认饮食记录", { exact: true }).waitFor();
   await page.getByText(/尚未保存/).waitFor();
+  assert.equal(await page.getByText("查看确定性计算公式", { exact: true }).count(), 0);
   if (screenshotDirectory) {
     fs.mkdirSync(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "meal-chat-desktop.png"), fullPage: true });
@@ -373,26 +442,29 @@ test("desktop: memory controls expose human-readable data and require confirmati
 test("desktop: active check-in stays off until its in-chat draft is confirmed", async () => {
   const { context, page } = await openApp({ width: 1440, height: 1000 });
   await openNavigation(page, "提醒");
-  await page.getByText("主动 check-in 默认关闭").waitFor();
-  await page.getByRole("button", { name: "设置主动 check-in", exact: true }).click();
+  await page.getByText("主动问候默认关闭").waitFor();
+  await page.getByRole("button", { name: "设置主动问候", exact: true }).click();
 
   const input = page.getByPlaceholder("直接说：我刚喝了水");
   await page.waitForFunction(
-    () => document.querySelector('textarea[placeholder="直接说：我刚喝了水"]')?.value.includes("主动 check-in"),
+    () => document.querySelector('textarea[placeholder="直接说：我刚喝了水"]')?.value.includes("主动问我"),
   );
   assert.equal(
     await input.inputValue(),
-    "我想每天晚上 9 点通过飞书主动 check-in，关注饮食、饮水和运动",
+    "我想每天晚上 9 点通过飞书主动问我，关注饮食、饮水和运动",
   );
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await page.getByText("确认启用主动 check-in").waitFor();
+  await page.getByText("确认启用主动问候").waitFor();
   await page.getByText(/不会自动写入/).waitFor();
   await page.getByRole("button", { name: "确认启用", exact: true }).click();
 
   await openNavigation(page, "提醒");
-  await page.getByRole("button", { name: "主动健康 check-in", exact: true }).waitFor();
-  await page.getByRole("button", { name: "每天", exact: true }).waitFor();
-  await page.getByRole("button", { name: "飞书群「浏览器验收」", exact: true }).waitFor();
+  await page.locator("#healthos-reminders").getByText("主动健康问候", { exact: true }).waitFor();
+  await page.locator("#healthos-reminders").getByText(/每天/).waitFor();
+  await page
+    .locator("#healthos-reminders .reminder-item-main small")
+    .getByText("发送到 飞书群「浏览器验收」", { exact: true })
+    .waitFor();
   if (screenshotDirectory) {
     fs.mkdirSync(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "active-check-in-desktop.png"), fullPage: true });

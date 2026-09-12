@@ -34,11 +34,14 @@ from src.agent.models import (
 )
 from src.agent.runner import (
     AgentRunner,
+    SEQUENTIAL_TOOL_RETRY_PROMPT,
     SYSTEM_PROMPT,
     TOOL_REQUIRED_RETRY_PROMPT,
     _preview_answer,
     _redact_result,
     _requires_health_tool,
+    _pending_confirmation_intent,
+    _sanitize_user_answer,
     _tool_request_message,
     _tool_result_message,
     _try_direct_relative_reminder,
@@ -104,8 +107,8 @@ def _error_message(
 ) -> str:
     error = result.get("error")
     if isinstance(error, dict):
-        return str(error.get("message", fallback))
-    return fallback
+        return _sanitize_user_answer(str(error.get("message", fallback)))
+    return _sanitize_user_answer(fallback)
 
 
 def _failed_update(
@@ -250,7 +253,11 @@ class LangGraphAgentRunner:
             self._route,
             {"model": "call_model", "end": END},
         )
-        builder.add_edge("reject_parallel_tools", END)
+        builder.add_conditional_edges(
+            "reject_parallel_tools",
+            self._route,
+            {"model": "call_model", "end": END},
+        )
         builder.add_conditional_edges(
             "dispatch_tool",
             self._route,
@@ -270,6 +277,7 @@ class LangGraphAgentRunner:
             "await_confirmation",
             self._route,
             {
+                "model": "call_model",
                 "execute_confirmation": "execute_confirmation",
                 "end": END,
             },
@@ -358,7 +366,7 @@ class LangGraphAgentRunner:
             )
 
         content = raw_reply.get("content")
-        answer = str(content or "").strip()
+        answer = _sanitize_user_answer(str(content or "").strip())
         tool_steps = _tool_steps_from_state(state)
         requires_tool = (
             state.get("pending_task") is not None
@@ -417,9 +425,29 @@ class LangGraphAgentRunner:
         self,
         state: HealthAgentGraphState,
     ) -> HealthAgentGraphState:
+        if int(state.get("model_rounds", 0)) < self._max_model_rounds:
+            messages = _messages_from_state(state)
+            messages.append(
+                AgentMessage(
+                    role="system",
+                    content=SEQUENTIAL_TOOL_RETRY_PROMPT,
+                )
+            )
+            return {
+                "messages": [
+                    message.model_dump(mode="json")
+                    for message in messages
+                ],
+                "model_reply": None,
+                "next_route": "model",
+            }
+
         return _failed_update(
             state,
-            answer="一次模型响应只能提出一个工具调用。",
+            answer=(
+                "这次没能完成请求，也没有写入或修改"
+                "任何健康数据。请稍后再试。"
+            ),
             finish_reason=AgentFinishReason.INVALID_ARGUMENTS,
         )
 
@@ -439,7 +467,7 @@ class LangGraphAgentRunner:
         if not isinstance(raw_calls, list) or len(raw_calls) != 1:
             return _failed_update(
                 state,
-                answer="一次模型响应只能提出一个工具调用。",
+                answer="这次请求没有成功完成，请稍后再试。",
                 finish_reason=AgentFinishReason.INVALID_ARGUMENTS,
             )
 
@@ -673,6 +701,30 @@ class LangGraphAgentRunner:
         if response.get("action") == "cancel":
             return _cancelled_update(state)
 
+        if response.get("action") == "revise":
+            text = str(response.get("text", "")).strip()
+            if not text:
+                return {"next_route": "confirmation"}
+            messages = _messages_from_state(state)
+            messages.append(AgentMessage(role="user", content=text))
+            return {
+                "messages": [
+                    message.model_dump(mode="json")
+                    for message in messages
+                ],
+                "turn_count": int(state.get("turn_count", 0)) + 1,
+                "user_text": text,
+                "answer": "",
+                "finish_reason": None,
+                "agent_state": AgentState.RUNNING.value,
+                "model_rounds": 0,
+                "tool_steps": [],
+                "pending_task": None,
+                "pending_confirmation": None,
+                "model_reply": None,
+                "next_route": "model",
+            }
+
         if response.get("action") != "confirm":
             return {
                 "agent_state": AgentState.AWAITING_CONFIRMATION.value,
@@ -872,9 +924,22 @@ class LangGraphAgentRunner:
             return AgentTurnOutcome(result=result, session_state=session_state)
 
         if session_state.pending_confirmation is not None:
+            pending_intent = _pending_confirmation_intent(normalized_text)
+            if pending_intent == "confirm":
+                return self.confirm_pending(session_state)
+            if pending_intent == "cancel":
+                return self.cancel_pending(session_state)
+            if pending_intent == "revise":
+                self._graph.invoke(
+                    Command(
+                        resume={"action": "revise", "text": normalized_text}
+                    ),
+                    config=self._config(session_state.session_id),
+                )
+                return self._outcome_from_checkpoint(session_state.session_id)
             result = AgentRunResult(
                 answer=(
-                    "当前已有待确认操作。请先点击确认或取消，"
+                    "当前已有待确认操作。请先确认或取消，也可以直接说明要改成什么；"
                     "不会继续执行新的写操作。"
                 ),
                 finish_reason=AgentFinishReason.AWAITING_CONFIRMATION,

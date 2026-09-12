@@ -292,6 +292,7 @@ select {
 .page-title { margin: 0 !important; }
 .page-title h2 { margin: 0 0 8px !important; max-width: 18ch; color: var(--ink) !important; font-size: clamp(27px, 3vw, 38px) !important; font-weight: 850 !important; line-height: 1.08 !important; letter-spacing: -.035em !important; }
 .page-title p { max-width: 66ch; margin: 0 !important; color: var(--ink-2) !important; font-size: 13px; line-height: 1.65; }
+.reminder-title h2 { max-width: 22ch; }
 .workspace-date { margin-bottom: 7px !important; color: var(--signal) !important; font-size: 10px !important; font-weight: 750; font-variant-numeric: tabular-nums; }
 .section-heading { margin: 0 0 4px; color: var(--ink); font-size: 15px; font-weight: 760; letter-spacing: -.015em; }
 .section-copy { max-width: 70ch; margin: 0 0 12px; color: var(--quiet); font-size: 11px; line-height: 1.6; }
@@ -348,6 +349,20 @@ select {
 #health-chat { border: 0 !important; border-radius: 14px 14px 0 0 !important; background: var(--paper) !important; color: var(--ink) !important; --background-fill-primary: #fbfcfa !important; --background-fill-secondary: #f2f4f1 !important; --block-background-fill: #fbfcfa !important; }
 #health-chat .message.bot, #health-chat .message-row.bot .message, #health-chat [data-testid="bot"] .message, #health-chat [data-testid="bot-message"] { border: 0 !important; border-radius: 12px !important; background: var(--field) !important; color: var(--ink) !important; }
 #health-chat .message, #health-chat .message-row .message { max-width: 88% !important; }
+#health-chat .message-row.user, #health-chat .message-row.user-row { width: 100% !important; max-width: 100% !important; }
+#health-chat .message.user, #health-chat .message-row.user .message, #health-chat [data-testid="user"] .message, #health-chat [data-testid="user-message"] {
+    width: fit-content !important;
+    min-width: min(280px, 82%) !important;
+    max-width: min(82%, 720px) !important;
+    overflow-wrap: break-word !important;
+    word-break: normal !important;
+}
+#health-chat .message-row.user-row .message.user > .message,
+#health-chat .message-row.user-row .message.user [data-testid="user"] {
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+}
 #health-chat .message.user, #health-chat .message-row.user .message, #health-chat [data-testid="user"] .message, #health-chat [data-testid="user-message"] { border-radius: 12px !important; background: var(--action) !important; color: #fff !important; }
 #health-chat .message.user *, #health-chat .message-row.user .message *, #health-chat [data-testid="user"] .message *, #health-chat [data-testid="user-message"] * { color: #fff !important; }
 #health-chat .icon-button-wrapper button { width: 30px !important; min-width: 30px !important; height: 30px !important; min-height: 30px !important; padding: 5px !important; border-radius: 7px !important; }
@@ -470,12 +485,10 @@ select {
 .inline-confirmation-actions { justify-content: flex-end !important; gap: 8px !important; padding: 0 12px 12px !important; }
 .inline-confirmation-actions > * { flex: 0 0 auto !important; min-width: 104px !important; }
 
-.timeline-table, .trend-table, .candidate-table, .goals-table, .reminders-table, .memory-table { overflow: auto !important; border: 0 !important; border-radius: 0 !important; background: transparent !important; }
-.timeline-table table, .trend-table table, .candidate-table table, .goals-table table, .reminders-table table, .memory-table table { min-width: 680px; font-size: 11px !important; font-variant-numeric: tabular-nums; }
-.candidate-table table { min-width: 900px; }
-.reminders-table table { min-width: 820px; }
-.timeline-table th, .trend-table th, .goals-table th, .reminders-table th, .memory-table th { border-bottom: 1px solid var(--line-strong) !important; background: transparent !important; color: var(--quiet) !important; font-size: 9px !important; font-weight: 650 !important; }
-.timeline-table td, .trend-table td, .goals-table td, .reminders-table td, .memory-table td { border-bottom: 1px solid var(--line) !important; background: transparent !important; color: var(--ink-2) !important; }
+.timeline-table, .trend-table, .goals-table, .memory-table { overflow: auto !important; border: 0 !important; border-radius: 0 !important; background: transparent !important; }
+.timeline-table table, .trend-table table, .goals-table table, .memory-table table { min-width: 680px; font-size: 11px !important; font-variant-numeric: tabular-nums; }
+.timeline-table th, .trend-table th, .goals-table th, .memory-table th { border-bottom: 1px solid var(--line-strong) !important; background: transparent !important; color: var(--quiet) !important; font-size: 9px !important; font-weight: 650 !important; }
+.timeline-table td, .trend-table td, .goals-table td, .memory-table td { border-bottom: 1px solid var(--line) !important; background: transparent !important; color: var(--ink-2) !important; }
 .trend-ledger { padding: 0 !important; overflow: hidden; }
 .trend-status { padding: 11px 15px !important; background: var(--field); color: var(--ink-2) !important; font-size: 10px !important; }
 
@@ -504,6 +517,18 @@ select {
 .check-in-setup > span { color: var(--signal); font-size: 10px; font-weight: 700; }
 .reminder-boundary { padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--field); }
 .reminder-boundary p { margin: 4px 0 0 !important; }
+.reminders-list-wrap { min-width: 0 !important; overflow: hidden; }
+.reminder-list { display: grid; max-height: 420px; overflow-y: auto; border-top: 1px solid var(--line-strong); }
+.reminder-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; min-width: 0; padding: 15px 2px; border-bottom: 1px solid var(--line); }
+.reminder-item-main { min-width: 0; }
+.reminder-item-main strong, .reminder-item-main span, .reminder-item-main small { display: block; overflow-wrap: anywhere; }
+.reminder-item-main strong { color: var(--ink); font-size: 13px; line-height: 1.5; }
+.reminder-item-main span { margin-top: 5px; color: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.reminder-item-main small { margin-top: 3px; color: var(--quiet); font-size: 10px; }
+.reminder-state { padding: 5px 8px; border-radius: 999px; background: var(--field); color: var(--action); font-size: 9px; white-space: nowrap; }
+.reminder-list-empty { display: block; padding: 22px 0 10px; border-bottom: 1px solid var(--line); }
+.reminder-list-empty strong { color: var(--ink); font-size: 13px; }
+.reminder-list-empty p { margin: 5px 0 0 !important; color: var(--quiet); font-size: 10px; }
 
 .privacy-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0; padding: 0 !important; overflow: hidden; }
 .privacy-item { display: grid; grid-template-columns: 30px 1fr; gap: 10px; padding: 16px; border-bottom: 1px solid var(--line); }
@@ -520,6 +545,13 @@ select {
 .margin-head span { color: var(--quiet); font-size: 9px; }
 .margin-head strong { margin-top: 3px; color: var(--ink); font-size: 14px; }
 .margin-head small { color: var(--quiet); font-size: 9px; font-variant-numeric: tabular-nums; }
+.margin-records { max-height: 260px; margin: 0 !important; padding: 0 !important; overflow-y: auto; list-style: none; }
+.margin-record { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.margin-record time { color: var(--quiet); font-size: 9px; font-variant-numeric: tabular-nums; }
+.margin-record span, .margin-record b, .margin-record small { display: block; min-width: 0; }
+.margin-record b { color: var(--ink); font-size: 10px; }
+.margin-record small { margin-top: 3px; color: var(--ink-2); font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+.margin-empty { margin: 0 !important; padding: 16px 0; border-bottom: 1px solid var(--line); color: var(--quiet); font-size: 10px; }
 .margin-note { padding: 18px 0; border-bottom: 1px solid var(--line); }
 .margin-note span, .margin-note strong { display: block; }
 .margin-note span { color: var(--signal); font-size: 9px; font-weight: 700; }
@@ -745,5 +777,110 @@ select {
     #health-chat {
         min-height: 280px !important;
         height: 280px !important;
+    }
+}
+
+/* Mobile task-flow repairs: anchor the real header to the document grid instead
+   of a transformed Gradio descendant, and keep the composer compact above nav. */
+@media (max-width: 720px) {
+    .gradio-container main.contain > .column {
+        position: relative !important;
+    }
+    #healthos-topbar-shell {
+        position: sticky !important;
+        inset: 0 auto auto !important;
+        z-index: 70 !important;
+        display: block !important;
+        height: 60px !important;
+        min-height: 60px !important;
+        align-self: start !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        background: var(--paper) !important;
+    }
+    .app-topbar {
+        position: relative !important;
+        inset: auto !important;
+        z-index: auto !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        min-height: 60px !important;
+        padding: 0 16px !important;
+    }
+    .app-topbar > div {
+        position: static !important;
+        min-width: 90px !important;
+        padding: 0 !important;
+    }
+    #topbar-coach-style {
+        position: absolute !important;
+        inset: 12px 54px auto auto !important;
+        z-index: 74 !important;
+        width: 108px !important;
+        min-width: 108px !important;
+    }
+    #main-tabs {
+        position: relative !important;
+    }
+    #healthos-record .page-wrap {
+        padding-top: 24px !important;
+        padding-bottom: calc(92px + env(safe-area-inset-bottom)) !important;
+    }
+    #healthos-record .conversation-title h2 {
+        font-size: clamp(28px, 9vw, 34px) !important;
+        letter-spacing: -.03em !important;
+    }
+    #healthos-record .chat-panel {
+        overflow: visible !important;
+    }
+    #health-chat {
+        min-height: 300px !important;
+        height: 300px !important;
+        border: 1px solid var(--line) !important;
+        border-bottom: 0 !important;
+        border-radius: 13px 13px 0 0 !important;
+    }
+    .composer-shell {
+        bottom: calc(72px + env(safe-area-inset-bottom)) !important;
+        gap: 6px !important;
+        padding: 9px !important;
+        border-radius: 0 0 13px 13px !important;
+        box-shadow: 0 12px 28px rgba(23,37,59,.09) !important;
+    }
+    .composer-row {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) 78px !important;
+        gap: 7px !important;
+    }
+    .composer-row > * {
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+    .composer-row textarea {
+        min-height: 44px !important;
+        max-height: 88px !important;
+        font-size: 16px !important;
+    }
+    .composer-row button {
+        width: 78px !important;
+        min-width: 78px !important;
+    }
+    .composer-tools {
+        min-height: 36px !important;
+        margin: 0 !important;
+    }
+    #chat-meal-upload {
+        min-height: 44px !important;
+    }
+    .confirmation-title {
+        align-items: flex-start !important;
+    }
+    .confirmation-title > div span {
+        max-width: 30ch !important;
+        line-height: 1.45 !important;
+    }
+    #main-tabs > .tab-wrapper,
+    #main-tabs > .tab-nav {
+        height: calc(66px + env(safe-area-inset-bottom)) !important;
     }
 }

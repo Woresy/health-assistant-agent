@@ -6,7 +6,7 @@ import json
 import re
 from copy import deepcopy
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from src.agent.context_pipeline import build_prompt_context
 from src.agent.models import (
@@ -33,7 +33,7 @@ SYSTEM_PROMPT = """
 
 你可以协助：记录和查询健康事实；读取及修改用户档案；创建、调整、暂停或恢复
 健康目标；生成今日与 7/14/30 天确定性汇总；检索带来源的一般健康知识；创建、
-查看、延后、暂停或取消本地提醒。
+查看、修改、延后、暂停或取消飞书提醒。
 
 规则：
 1. 不做诊断，不替代医生，不夸大健康结论。
@@ -44,7 +44,8 @@ SYSTEM_PROMPT = """
 6. 档案写入调用 prepare_profile_update，目标写入调用 prepare_goal_change。
 7. 一般健康知识必须调用 retrieve_health_knowledge 并在回答中展示来源；医疗、用药、
    急症或证据不足时遵守工具的拒答结果。
-8. 提醒先调用 create_reminder_draft；查看或改变提醒调用 list_or_cancel_reminders。
+8. 提醒先调用 create_reminder_draft；查看、修改或改变提醒调用
+   list_or_cancel_reminders。所有提醒都通过飞书发送，不要询问用户选择渠道。
 9. 不能只用文本声称已经生成草稿或已经调用工具。
 10. 所有写操作必须先生成草稿，等待用户明确确认。
 11. 不得调用工具白名单以外的函数。
@@ -67,6 +68,12 @@ SYSTEM_PROMPT = """
 22. 主动 check-in 复用 create_reminder_draft，使用 reminder_type=check_in、
    recurrence=daily 或 weekdays、delivery_channel=feishu；它只询问已确认记录是否需要
    补充，不得把缺少记录表述成用户没有完成，也不得自动写入健康事实。
+23. 多轮对话中应解析“刚才那条”“改成”“不是”等上下文指代。用户修订待确认草稿时，
+   旧草稿立即失效，必须基于修订内容重新调用准备工具并再次等待确认。
+24. 系统会提供当前“连续对话场景”。场景策略负责组织多轮服务节奏，但不能覆盖安全、
+   工具、事实来源和确认规则；省略式追问应延续最近场景，明确切换主题时跟随用户新意图。
+25. 用户要求修改已有提醒时，必须先查看提醒，再使用
+   list_or_cancel_reminders 的 update 操作原地修改；不得通过新建提醒替代修改。
 """.strip()
 
 
@@ -128,6 +135,14 @@ _HEALTH_DOMAIN_TERMS = (
     "教练风格",
     "营养",
     "健康建议",
+    "睡眠",
+    "失眠",
+    "作息",
+    "疲劳",
+    "胸痛",
+    "胸闷",
+    "呼吸困难",
+    "过敏",
 )
 
 _IMPLICIT_RECORD_TERMS = (
@@ -138,15 +153,84 @@ _IMPLICIT_RECORD_TERMS = (
     "步行了",
     "走了",
     "称重",
+    "胸痛",
+    "胸闷",
+    "呼吸困难",
+    "晕厥",
+)
+
+_IMPLICIT_KNOWLEDGE_TERMS = (
+    "睡不着",
+    "失眠",
+    "睡眠不好",
+    "白天很困",
+    "严重过敏",
 )
 
 TOOL_REQUIRED_RETRY_PROMPT = """
 上一条响应没有调用工具，因此不能作为有效结果。
-当前用户请求涉及健康事件的记录、查询、修改、删除或汇总。
-也可能涉及档案、目标、可信知识或提醒。你必须调用匹配的白名单工具。
+当前用户请求涉及健康事件的记录、查询、修改、删除或汇总，
+也可能涉及档案、目标、可信知识、安全分流或提醒。你必须调用匹配的白名单工具。
 不要通过普通文本声称已经生成草稿或已经保存。
 如果缺少必填参数，也应提出工具调用，由工具校验生成追问。
 """.strip()
+
+
+SEQUENTIAL_TOOL_RETRY_PROMPT = """
+上一条响应同时提出了多个工具调用，当前编排器会按顺序执行工具。
+请一次只选择一个工具，先调用当前最需要的那个；获得结果后，
+再在下一轮决定是否调用其他工具。不要向用户提及这项内部约束。
+""".strip()
+
+
+_INTERNAL_FOOD_REFERENCE = re.compile(
+    r"\s*[（(]\s*(?:[a-z]+:)?food[_-]?\d+\s*[）)]",
+    flags=re.IGNORECASE,
+)
+_INTERNAL_FOOD_CODE = re.compile(
+    r"(?<![\w:])(?:[a-z]+:)?food[_-]?\d+(?!\w)",
+    flags=re.IGNORECASE,
+)
+
+
+def _sanitize_user_answer(answer: str) -> str:
+    """从最终用户文案中移除内部编号和实现术语。"""
+
+    sanitized = _INTERNAL_FOOD_REFERENCE.sub("", answer)
+    sanitized = _INTERNAL_FOOD_CODE.sub("标准食物条目", sanitized)
+    sanitized = re.sub(
+        r"ISO\s*8601(?:\s*格式)?",
+        "清楚的日期和时间",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    sanitized = re.sub(r"[ \t]+([，。；：！？])", r"\1", sanitized)
+    return sanitized.strip()
+
+
+_TEXT_CONFIRMATIONS = {
+    "确认", "确认保存", "确认执行", "可以", "没问题", "就这样", "保存吧",
+}
+_TEXT_CANCELLATIONS = {
+    "取消", "取消操作", "不要了", "算了", "先不保存", "不保存",
+}
+_DRAFT_REVISION_TERMS = (
+    "改成", "改为", "修改为", "更正", "纠正", "调整为", "不是", "应该是",
+    "换成", "少了", "多了", "补充",
+)
+
+
+def _pending_confirmation_intent(user_text: str) -> str | None:
+    """识别待确认阶段的文本确认、取消或草稿修订。"""
+
+    normalized = user_text.strip().casefold().strip("，。！？!?；; ")
+    if normalized in _TEXT_CONFIRMATIONS:
+        return "confirm"
+    if normalized in _TEXT_CANCELLATIONS:
+        return "cancel"
+    if any(term in normalized for term in _DRAFT_REVISION_TERMS):
+        return "revise"
+    return None
 
 
 _RELATIVE_REMINDER_PATTERN = re.compile(
@@ -162,6 +246,15 @@ _PREFIX_RELATIVE_REMINDER_PATTERN = re.compile(
     r"(?P<amount>\d{1,4}|[一二两三四五六七八九十]{1,3})\s*"
     r"(?P<unit>分钟|小时)\s*后\s*"
     r"(?P<content>.+)"
+)
+
+_RECURRING_REMINDER_PATTERN = re.compile(
+    r"(?P<recurrence>每天|工作日)\s*"
+    r"(?P<period>凌晨|早上|上午|中午|下午|傍晚|晚上)?\s*"
+    r"(?P<hour>\d{1,2})\s*点\s*"
+    r"(?:(?P<half>半)|(?P<minute>\d{1,2})\s*分?)?\s*"
+    r"(?:(?:在|通过|用)\s*飞书(?:上)?\s*)?"
+    r"提醒我\s*(?P<content>.+)"
 )
 
 
@@ -202,7 +295,7 @@ def _try_direct_relative_reminder(
     user_text: str,
     router: HealthToolRouter,
 ) -> AgentTurnOutcome | None:
-    """明确的相对提醒和主动 check-in 走确定性草稿路径。"""
+    """明确的相对、周期提醒和主动 check-in 走确定性草稿路径。"""
 
     normalized_text = user_text.strip()
     is_check_in = (
@@ -259,38 +352,78 @@ def _try_direct_relative_reminder(
             "check_in_focus": check_in_focus,
         }
     else:
-        matched = _RELATIVE_REMINDER_PATTERN.search(
-            normalized_text
-        ) or _PREFIX_RELATIVE_REMINDER_PATTERN.search(
-            normalized_text
-        )
-        if matched is None:
-            return None
-        amount = _duration_number(matched.group("amount"))
-        if amount is None:
-            return None
-        delta = (
-            timedelta(minutes=amount)
-            if matched.group("unit") == "分钟"
-            else timedelta(hours=amount)
-        )
-        scheduled_for = (
-            datetime.now(ZoneInfo(session_state.timezone_name)) + delta
-        ).replace(microsecond=0)
-        content = matched.group("content").strip(" ，。！？!?；;")
-        if not content:
-            return None
-        arguments = {
-            "content": content,
-            "scheduled_for": scheduled_for.isoformat(),
-            "timezone_name": session_state.timezone_name,
-            "delivery_channel": (
-                "feishu"
-                if matched.group("channel") == "飞书"
-                or "飞书" in normalized_text
-                else "local"
-            ),
-        }
+        recurring_match = _RECURRING_REMINDER_PATTERN.search(normalized_text)
+        if recurring_match is not None:
+            hour = int(recurring_match.group("hour"))
+            minute = (
+                30
+                if recurring_match.group("half")
+                else int(recurring_match.group("minute") or 0)
+            )
+            period = recurring_match.group("period") or ""
+            if period in {"中午", "下午", "傍晚", "晚上"} and hour < 12:
+                hour += 12
+            if period in {"凌晨", "早上", "上午"} and hour == 12:
+                hour = 0
+            if hour > 23 or minute > 59:
+                return None
+            active_timezone = ZoneInfo(session_state.timezone_name)
+            now = datetime.now(active_timezone)
+            scheduled_for = now.replace(
+                hour=hour,
+                minute=minute,
+                second=0,
+                microsecond=0,
+            )
+            recurrence = (
+                "weekdays"
+                if recurring_match.group("recurrence") == "工作日"
+                else "daily"
+            )
+            while scheduled_for <= now or (
+                recurrence == "weekdays" and scheduled_for.weekday() >= 5
+            ):
+                scheduled_for += timedelta(days=1)
+            content = recurring_match.group("content").strip(
+                " ，。！？!?；;"
+            )
+            if not content:
+                return None
+            arguments = {
+                "content": content,
+                "scheduled_for": scheduled_for.isoformat(),
+                "timezone_name": session_state.timezone_name,
+                "delivery_channel": "feishu",
+                "recurrence": recurrence,
+            }
+        else:
+            matched = _RELATIVE_REMINDER_PATTERN.search(
+                normalized_text
+            ) or _PREFIX_RELATIVE_REMINDER_PATTERN.search(
+                normalized_text
+            )
+            if matched is None:
+                return None
+            amount = _duration_number(matched.group("amount"))
+            if amount is None:
+                return None
+            delta = (
+                timedelta(minutes=amount)
+                if matched.group("unit") == "分钟"
+                else timedelta(hours=amount)
+            )
+            scheduled_for = (
+                datetime.now(ZoneInfo(session_state.timezone_name)) + delta
+            ).replace(microsecond=0)
+            content = matched.group("content").strip(" ，。！？!?；;")
+            if not content:
+                return None
+            arguments = {
+                "content": content,
+                "scheduled_for": scheduled_for.isoformat(),
+                "timezone_name": session_state.timezone_name,
+                "delivery_channel": "feishu",
+            }
 
     call_id = f"direct-reminder-{session_state.turn_count + 1}"
     dispatch = router.dispatch(
@@ -384,6 +517,12 @@ def _requires_health_tool(
     if any(
         term in normalized_text
         for term in _IMPLICIT_RECORD_TERMS
+    ):
+        return True
+
+    if any(
+        term in normalized_text
+        for term in _IMPLICIT_KNOWLEDGE_TERMS
     ):
         return True
 
@@ -661,6 +800,18 @@ def format_health_event_summary(
     return "健康记录"
 
 
+def _display_reminder_time(value: object, timezone_name: str) -> str:
+    """把提醒时间转成用户熟悉的本地表达。"""
+
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        return parsed.astimezone(ZoneInfo(timezone_name)).strftime(
+            "%m月%d日 %H:%M"
+        )
+    except (ValueError, TypeError, ZoneInfoNotFoundError):
+        return str(value or "时间待确认")
+
+
 def _preview_answer(
     draft_data: dict[str, object],
 ) -> str:
@@ -750,7 +901,11 @@ def _preview_answer(
         )
 
     if action == "reminder_create":
-        destination = preview.get("destination_label", "本地提醒中心")
+        destination = preview.get("destination_label", "飞书")
+        scheduled_text = _display_reminder_time(
+            preview.get("scheduled_for"),
+            str(preview.get("timezone_name", "Asia/Shanghai")),
+        )
         if preview.get("reminder_type") == "check_in":
             recurrence = "工作日" if preview.get("recurrence") == "weekdays" else "每天"
             focus_labels = {
@@ -764,29 +919,38 @@ def _preview_answer(
                 for item in preview.get("check_in_focus", [])
             )
             return (
-                "主动 check-in 草稿已经准备好，目前还没有启用。\n\n"
+                "主动问候草稿已经准备好，目前还没有启用。\n\n"
                 f"**{recurrence}主动询问：{focus or '饮食、饮水和运动'}**  "
-                f"首次发送 {preview.get('scheduled_for', '')}\n\n"
-                f"发送到：{destination}；时区：{preview.get('timezone_name', '')}。"
+                f"首次发送 {scheduled_text}\n\n"
+                f"发送到：{destination}。"
                 "届时只根据已确认记录询问是否需要补记，不会自动写入；确认后才启用。"
             )
         return (
             "提醒草稿已经准备好，目前还没有安排。\n\n"
             f"**{preview.get('content', '健康提醒')}**  "
-            f"{preview.get('scheduled_for', '')}\n\n"
-            f"发送到：{destination}；时区：{preview.get('timezone_name', '')}。"
+            f"{scheduled_text}\n\n"
+            f"发送到：{destination}。"
             "确认后只会创建一次。"
         )
 
     if action == "reminder_change":
         operation = {
+            "update": "修改",
             "cancel": "取消",
             "snooze": "延后",
             "pause": "暂停",
             "resume": "恢复",
         }.get(str(preview.get("operation", "")), "修改")
+        after = preview.get("after", {})
+        updated_summary = ""
+        if operation == "修改" and isinstance(after, dict):
+            updated_summary = (
+                f"\n\n**{after.get('content', '健康提醒')}**  "
+                f"{_display_reminder_time(after.get('scheduled_for'), str(after.get('timezone_name', 'Asia/Shanghai')))}"
+            )
         return (
             f"我已经准备好{operation}这条提醒，目前还没有执行。\n\n"
+            f"{updated_summary}"
             "确认后提醒状态才会改变；取消草稿则保持原状态。"
         )
 
@@ -893,10 +1057,26 @@ class AgentRunner:
             .pending_confirmation
             is not None
         ):
+            pending_intent = _pending_confirmation_intent(normalized_text)
+            if pending_intent == "confirm":
+                return self.confirm_pending(session_state)
+            if pending_intent == "cancel":
+                return self.cancel_pending(session_state)
+            if pending_intent == "revise":
+                revision_state = session_state.model_copy(
+                    update={
+                        "state": AgentState.RUNNING,
+                        "pending_confirmation": None,
+                    }
+                )
+                return self.run_turn(
+                    session_state=revision_state,
+                    user_text=normalized_text,
+                )
             result = AgentRunResult(
                 answer=(
                     "当前已有待确认操作。"
-                    "请先点击确认或取消，"
+                    "请先确认或取消，也可以直接说明要改成什么；"
                     "不会继续执行新的写操作。"
                 ),
                 finish_reason=(
@@ -984,9 +1164,7 @@ class AgentRunner:
                     is not None
                 )
 
-                answer = (
-                    reply.content.strip()
-                )
+                answer = _sanitize_user_answer(reply.content.strip())
 
                 requires_tool = (
                     pending_task
@@ -1099,24 +1277,24 @@ class AgentRunner:
             if len(
                 reply.tool_calls
             ) != 1:
-                answer = (
-                    "一次模型响应只能"
-                    "提出一个工具调用。"
-                )
+                if model_round < self._max_model_rounds:
+                    messages.append(
+                        AgentMessage(
+                            role="system",
+                            content=SEQUENTIAL_TOOL_RETRY_PROMPT,
+                        )
+                    )
+                    continue
 
                 return self._failed_outcome(
-                    session_state=(
-                        session_state
-                    ),
+                    session_state=session_state,
                     messages=messages,
-                    answer=answer,
-                    finish_reason=(
-                        AgentFinishReason
-                        .INVALID_ARGUMENTS
+                    answer=(
+                        "这次没能完成请求，也没有写入或修改"
+                        "任何健康数据。请稍后再试。"
                     ),
-                    model_rounds=(
-                        model_round
-                    ),
+                    finish_reason=AgentFinishReason.INVALID_ARGUMENTS,
+                    model_rounds=model_round,
                     tool_steps=tool_steps,
                 )
 
@@ -1277,12 +1455,12 @@ class AgentRunner:
                     error,
                     dict,
                 ):
-                    answer = str(
+                    answer = _sanitize_user_answer(str(
                         error.get(
                             "message",
                             "工具参数无效",
                         )
-                    )
+                    ))
                 else:
                     answer = (
                         "工具参数无效"
@@ -1341,12 +1519,12 @@ class AgentRunner:
                     error,
                     dict,
                 ):
-                    answer = str(
+                    answer = _sanitize_user_answer(str(
                         error.get(
                             "message",
                             "工具执行失败",
                         )
-                    )
+                    ))
                 else:
                     answer = (
                         "工具执行失败"

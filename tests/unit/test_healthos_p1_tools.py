@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from datetime import datetime
 
 import pytest
 
@@ -178,7 +179,13 @@ def test_reminder_lifecycle_requires_confirmation(router: HealthToolRouter) -> N
 
 def test_reminder_draft_accepts_relative_scheduled_for(
     router: HealthToolRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("FEISHU_REMINDER_ENABLED", "true")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/example",
+    )
     draft = dispatch(
         router,
         "create_reminder_draft",
@@ -188,6 +195,90 @@ def test_reminder_draft_accepts_relative_scheduled_for(
 
     assert draft.result["ok"] is True
     assert draft.result["data"]["preview"]["content"] == "喝水"
+    assert draft.result["data"]["preview"]["delivery_channel"] == "feishu"
+
+
+def test_daily_feishu_reminder_accepts_natural_chinese_time(
+    router: HealthToolRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FEISHU_REMINDER_ENABLED", "true")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/example",
+    )
+
+    draft = dispatch(
+        router,
+        "create_reminder_draft",
+        {
+            "content": "准备睡觉",
+            "scheduled_for": "每天晚上11点",
+            "recurrence": "daily",
+        },
+        "natural-daily-reminder",
+    )
+
+    assert draft.result["ok"] is True
+    preview = draft.result["data"]["preview"]
+    assert preview["delivery_channel"] == "feishu"
+    assert datetime.fromisoformat(preview["scheduled_for"]).hour == 23
+    reminder_schema = next(
+        item["function"]["parameters"]
+        for item in router.tool_definitions
+        if item["function"]["name"] == "create_reminder_draft"
+    )
+    assert reminder_schema["properties"]["delivery_channel"]["const"] == (
+        "feishu"
+    )
+
+
+def test_reminder_update_changes_existing_record_in_place(
+    router: HealthToolRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FEISHU_REMINDER_ENABLED", "true")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/example",
+    )
+    created = dispatch(
+        router,
+        "create_reminder_draft",
+        {
+            "content": "晚间拉伸",
+            "scheduled_for": "2099-09-05T21:00:00+08:00",
+            "recurrence": "daily",
+        },
+        "reminder-before-update",
+    )
+    router.confirm(pending_from(created, "create_reminder_draft"))
+    original = dispatch(
+        router, "list_or_cancel_reminders", {"action": "list"}
+    ).result["data"]["reminders"][0]
+
+    changed = dispatch(
+        router,
+        "list_or_cancel_reminders",
+        {
+            "action": "update",
+            "reminder_id": original["reminder_id"],
+            "content": "睡前拉伸",
+            "scheduled_for": "2099-09-05T22:00:00+08:00",
+            "recurrence": "daily",
+        },
+        "reminder-update",
+    )
+    assert changed.result["ok"] is True
+    router.confirm(pending_from(changed, "list_or_cancel_reminders"))
+
+    reminders = dispatch(
+        router, "list_or_cancel_reminders", {"action": "list"}
+    ).result["data"]["reminders"]
+    assert len(reminders) == 1
+    assert reminders[0]["reminder_id"] == original["reminder_id"]
+    assert reminders[0]["content"] == "睡前拉伸"
+    assert reminders[0]["delivery_channel"] == "feishu"
 
 
 def test_reminder_intent_only_exposes_reminder_tools(router: HealthToolRouter) -> None:

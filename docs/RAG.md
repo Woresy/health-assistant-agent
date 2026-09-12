@@ -1,4 +1,12 @@
-# 食物检索 Hybrid RAG
+# RAG 总览与食物检索 Hybrid RAG
+
+项目包含两条不同但共享边界的检索链路：
+
+- 食物检索：Embedding 找到结构化食物候选，营养值由确定性程序计算；
+- 健康知识：Embedding 找到可信文档，Top-K 文档作为带引用回答的上下文。
+
+健康知识的向量索引、`top_k`、`min_score`、基线对比和安全门控详见
+[`HEALTH_KNOWLEDGE.md`](HEALTH_KNOWLEDGE.md)。本文件以下部分专门描述食物候选检索。
 
 ## 检索流程
 
