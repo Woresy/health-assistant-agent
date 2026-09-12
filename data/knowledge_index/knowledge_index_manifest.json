@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "index_id": "sha256:a085e19811a87fb1bd1f0c903ddb64ed249b85d2b1fbec8da01f5a1977a88e62",
+  "created_at": "2026-09-12T08:22:37.911804+00:00",
+  "model_name": "BAAI/bge-small-zh-v1.5",
+  "model_revision": "7999e1d3359715c523056ef9478215996d62a620",
+  "query_instruction": "为这个句子生成表示以用于检索相关文章：",
+  "dataset_sha256": "e74ac1904edd0d8ee515d0876ca54f8abea3b0c1b019036333cea644f440dd6f",
+  "document_count": 6,
+  "embedding_dimension": 512,
+  "embedding_dtype": "float32",
+  "document_ids": [
+    "who-physical-activity-2024",
+    "cdc-adult-activity-2023",
+    "who-healthy-diet-2026",
+    "who-sodium-reduction-2026",
+    "cdc-water-healthier-drinks-2026",
+    "cdc-sleep-2024"
+  ],
+  "embeddings_file": "knowledge_embeddings.npy",
+  "embeddings_sha256": "bb8d844527cf909427a3c3e06ed6e506be0057f13757e859a922b0ca29682a39"
+}

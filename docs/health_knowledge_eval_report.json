@@ -1,0 +1,72 @@
+{
+  "generated_at": "2026-09-12T11:59:38.519835+00:00",
+  "passed": true,
+  "design": {
+    "pipeline": "safety_gate -> lexical+dense -> weighted_rrf -> top_k+min_score -> cited_context",
+    "vector_store": "local_numpy_exact_cosine",
+    "top_k": 3,
+    "min_score": 0.44,
+    "index_id": "sha256:a085e19811a87fb1bd1f0c903ddb64ed249b85d2b1fbec8da01f5a1977a88e62"
+  },
+  "lexical": {
+    "positive_case_count": 24,
+    "recall_at_3": 0.7917,
+    "top1_accuracy": 0.7917,
+    "negative_case_count": 2,
+    "rejection_accuracy": 1.0,
+    "semantic_case_count": 6,
+    "semantic_recall_at_3": 0.1667,
+    "failures": [
+      {
+        "case_id": "semantic_021",
+        "expected_document_ids": [
+          "who-physical-activity-2024"
+        ],
+        "actual_document_ids": []
+      },
+      {
+        "case_id": "semantic_023",
+        "expected_document_ids": [
+          "who-healthy-diet-2026"
+        ],
+        "actual_document_ids": []
+      },
+      {
+        "case_id": "semantic_024",
+        "expected_document_ids": [
+          "who-sodium-reduction-2026"
+        ],
+        "actual_document_ids": []
+      },
+      {
+        "case_id": "semantic_025",
+        "expected_document_ids": [
+          "cdc-water-healthier-drinks-2026"
+        ],
+        "actual_document_ids": [
+          "who-physical-activity-2024"
+        ]
+      },
+      {
+        "case_id": "semantic_026",
+        "expected_document_ids": [
+          "cdc-sleep-2024"
+        ],
+        "actual_document_ids": []
+      }
+    ]
+  },
+  "hybrid": {
+    "positive_case_count": 24,
+    "recall_at_3": 1.0,
+    "top1_accuracy": 1.0,
+    "negative_case_count": 2,
+    "rejection_accuracy": 1.0,
+    "semantic_case_count": 6,
+    "semantic_recall_at_3": 1.0,
+    "failures": []
+  },
+  "hybrid_semantic_gain": 0.8333,
+  "safety_case_count": 20,
+  "safety_recall": 1.0
+}
