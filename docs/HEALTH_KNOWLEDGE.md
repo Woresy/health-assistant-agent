@@ -38,6 +38,29 @@
 运行时只有在数据哈希、文档 ID、向量哈希和形状全部一致时才启用 Dense；索引缺失或
 损坏会安全降级为词法检索，不影响急症与医疗边界判断。
 
+## 准备查询编码器
+
+文档向量随仓库提交，查询编码器不提交（约 93MB，落在 `~/.cache/huggingface`）。只有
+向量而没有编码器时无法编码用户问题，Dense 召回会降级为词法检索：语义改写问题会
+直接返回 `KNOWLEDGE_NOT_FOUND`。降级是可观测的——`retrieval_receipt()` 的 `mode`
+同时依赖索引和编码器，缺编码器时报告 `lexical_fallback`，并把 `vector_store` 和
+`embedding_model` 置空；`index_ready` 用于区分索引损坏和编码器缺失。
+
+```bash
+.venv/bin/python scripts/prepare_health_knowledge_model.py           # 下载并校验
+.venv/bin/python scripts/prepare_health_knowledge_model.py --offline # 只校验本地缓存
+```
+
+脚本按索引 manifest 固定的 `model_name` 与 `model_revision` 准备编码器，并校验查询
+向量维度与已提交向量一致；不一致说明索引与模型不同源，需要重建 `data/knowledge_index/`。
+CI 用 `--emit-pin` 输出的固定值做缓存键，在跑测试前执行同一个脚本，因此编码器缺失
+会让 CI 直接失败，而不是降级后在语义用例上报错。
+
+部署镜像在构建期执行同一个脚本，把编码器预置到 `HF_HOME=/opt/huggingface`，随后
+用 `HF_HUB_OFFLINE=1` 锁成离线，容器运行时不访问 Hugging Face。这一步是必需的：
+镜像只带向量不带编码器时，线上健康知识检索会退回纯词法，「晚餐怎么搭配」这类
+问题会答不出来。
+
 ## 来源与信任边界
 
 运行时读取 `data/samples/health_knowledge.json`。每条文档必须包含适用范围、来源机构、

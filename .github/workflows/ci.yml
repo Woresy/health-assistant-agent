@@ -29,8 +29,23 @@ jobs:
           node-version: "20"
           cache: npm
 
+      - name: Resolve health knowledge query encoder pin
+        id: embedding
+        run: >-
+          python scripts/prepare_health_knowledge_model.py
+          --emit-pin >> "$GITHUB_OUTPUT"
+
+      - name: Cache health knowledge query encoder
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-${{ steps.embedding.outputs.cache_key }}
+
       - name: Install fixed dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Prepare health knowledge query encoder
+        run: python scripts/prepare_health_knowledge_model.py
 
       - name: Install browser test dependencies
         run: npm ci --ignore-scripts

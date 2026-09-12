@@ -24,9 +24,12 @@ def test_committed_knowledge_index_matches_source() -> None:
     repository = HealthKnowledgeRepository()
     receipt = repository.retrieval_receipt()
 
-    assert receipt["mode"] == "hybrid"
-    assert receipt["vector_store"] == "local_numpy_exact_cosine"
+    assert receipt["index_ready"] is True
     assert receipt["index_id"].startswith("sha256:")
+    assert receipt["mode"] == "hybrid", (
+        "索引可用但查询编码器缺失：先运行 scripts/prepare_health_knowledge_model.py"
+    )
+    assert receipt["vector_store"] == "local_numpy_exact_cosine"
     assert receipt["min_score"] == 0.44
 
 

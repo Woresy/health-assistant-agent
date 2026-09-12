@@ -277,14 +277,20 @@ class HealthKnowledgeRepository:
         return [(document_ids[int(index)], float(scores[int(index)])) for index in indices]
 
     def retrieval_receipt(self) -> dict[str, Any]:
-        """返回不含问题和文档正文的检索配置凭据。"""
+        """返回不含问题和文档正文的检索配置凭据。
 
-        dense_ready = self._load_dense_index()
+        Dense 需要索引和查询编码器同时可用：只校验索引会在缺少编码器的环境里
+        把纯词法检索报告成 hybrid。`index_ready` 用于区分索引损坏和编码器缺失。
+        """
+
+        index_ready = self._load_dense_index()
+        dense_ready = index_ready and self._get_embedder() is not None
         return {
             "mode": "hybrid" if dense_ready else "lexical_fallback",
+            "index_ready": index_ready,
             "vector_store": "local_numpy_exact_cosine" if dense_ready else None,
-            "embedding_model": self._manifest.model_name if self._manifest else None,
-            "index_id": self._manifest.index_id if self._manifest else None,
+            "embedding_model": self._manifest.model_name if dense_ready and self._manifest else None,
+            "index_id": self._manifest.index_id if index_ready and self._manifest else None,
             "pool_size": self.pool_size,
             "min_score": self.min_score,
             "min_margin": self.min_margin,
