@@ -79,11 +79,36 @@ async function waitForApplication(url, timeoutMs = 90000) {
   throw new Error(`Gradio did not become ready.\n${serverOutput}`);
 }
 
+// 页面加载后，demo.load 会异步把已保存的对话恢复进 #health-chat，并整体覆盖
+// 它的值。如果用例在恢复完成之前就发消息，乐观回显的那条会被这次覆盖抹掉，
+// 用例随后就在等一条已经不存在的消息。对话越长、机器越慢越容易撞上，CI 上
+// 尤其明显。这里等内容连续两次读取不再变化，认为恢复已经落定。
+async function waitForConversationRestore(page) {
+  // 不要用 waitForLoadState("networkidle")：Gradio 一直挂着 SSE 长连接，
+  // 它永远不会 resolve，只会白等满 30 秒超时，每个用例都多付这笔开销。
+  // 改为轮询聊天区内容，连续三次读到相同结果就认为恢复已经落定；
+  // 至少轮询三次，避免恢复还没开始时把连续两次空白误判成已稳定。
+  let previous = null;
+  let stable = 0;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const current = await page.locator("#health-chat").innerText().catch(() => null);
+    if (current !== null && current === previous) {
+      stable += 1;
+      if (stable >= 3) return;
+    } else {
+      stable = 0;
+    }
+    previous = current;
+    await page.waitForTimeout(120);
+  }
+}
+
 async function openApp(viewport) {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "今日观察", exact: true }).waitFor();
+  await waitForConversationRestore(page);
   return { context, page };
 }
 
@@ -238,6 +263,7 @@ test("desktop: history restores and a daily record opens its edit conversation",
   }
 
   await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForConversationRestore(page);
   await page.locator("#health-chat").getByText("请回复这条浏览器测试消息", { exact: true }).waitFor();
   await page.getByText("浏览器测试回复：消息已收到。").waitFor();
 
