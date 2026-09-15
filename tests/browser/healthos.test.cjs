@@ -153,7 +153,30 @@ before(async () => {
   }
   await waitForApplication(baseUrl);
   browser = await playwright.chromium.launch({ headless: true });
+  await warmUpApplication();
 });
+
+// Gradio 的第一次服务端往返要额外付建连和首次调用的开销：实测首轮约 1.9s，
+// 之后稳定在 130-150ms。不预热的话，第一个带计时断言的用例会替所有人吃掉
+// 这段冷启动——"回显是否即时"那条断言就变成了在测冷启动。
+//
+// 预热必须是只读的：发聊天消息会写进对话库，污染后面校验历史记录的用例。
+// 这里用「趋势与报告」的刷新，走同样的服务端往返但不写任何数据。
+async function warmUpApplication() {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await page.getByRole("heading", { name: "今日观察", exact: true }).waitFor();
+    await openNavigation(page, "趋势与报告");
+    await page.getByRole("button", { name: "刷新趋势", exact: true }).click();
+    await page.getByText(/天有数据/).first().waitFor({ timeout: 20000 });
+  } catch {
+    // 预热只为付掉冷启动，失败不应该让整个套件失败。
+  } finally {
+    await context.close();
+  }
+}
 
 after(async () => {
   if (browser) await browser.close();
