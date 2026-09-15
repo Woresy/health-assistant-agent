@@ -23,6 +23,9 @@ playwright-report/
 deploy/tencent/runtime-data/
 deploy/tencent/production.env
 
+# Detection weights (Ultralytics AGPL-3.0, not distributed with this MIT repo)
+runtime/models/
+
 # Optional repository-local Hugging Face cache
 .cache/huggingface/
 data/index-before-semantic-hints/
@@ -47,6 +50,8 @@ data/health_events.jsonl
 data/health_events.jsonl.*
 data/traces.jsonl
 data/traces.jsonl.*
+data/detection_traces.jsonl
+data/detection_traces.jsonl.*
 data/agent_traces.jsonl
 data/agent_traces.jsonl.*
 data/conversations/
@@ -66,3 +71,9 @@ data/healthos.db-wal
 # Local interview handbook exports
 docs/健康助理Agent项目面试全景手册.*
 docs/面试手册-pdf.css
+docs/HealthOS-*面试*
+docs/HealthOS-Agent核心问题-*
+docs/healthos-interview-qa.*
+
+# Stray session artifact written by local tooling
+:memory:*

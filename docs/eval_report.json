@@ -1,7 +1,7 @@
 {
   "retrieval_mode": "hybrid",
-  "dataset_id": "foods_sample:sha256:8adef74a5dc8",
-  "dataset_record_count": 28,
+  "dataset_id": "foods_sample:sha256:de96ef1f7ea7",
+  "dataset_record_count": 33,
   "index_dir": "data/index",
   "case_count": 20,
   "expected_case_count": 19,

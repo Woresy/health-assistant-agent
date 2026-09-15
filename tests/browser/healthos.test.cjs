@@ -55,7 +55,7 @@ function startModelServer(port) {
               finish_reason: "stop",
             }],
           }));
-        }, 450);
+        }, 700);
       });
     });
     modelServer.listen(port, "127.0.0.1", resolve);
@@ -134,6 +134,8 @@ before(async () => {
       AGENT_TRACE_PATH: path.join(temporaryDirectory, "agent-traces.jsonl"),
       APP_HOST: "127.0.0.1",
       APP_PORT: String(port),
+      // 浏览器验收固定跑手填链路，识别开关不受开发机环境影响。
+      MEAL_DETECTION_MODE: "disabled",
       FEISHU_DESTINATION_LABEL: "飞书群「浏览器验收」",
       FEISHU_REMINDER_ENABLED: "true",
       FEISHU_WEBHOOK_URL: "https://open.feishu.cn/open-apis/bot/v2/hook/browser-e2e",
@@ -172,8 +174,18 @@ after(async () => {
 test("desktop: history restores and a daily record opens its edit conversation", async () => {
   const { context, page } = await openApp({ width: 1440, height: 1000 });
   const input = page.getByPlaceholder("直接说：我刚喝了水");
-  await input.fill("请回复这条浏览器测试消息");
+  const immediateMessage = "请回复这条浏览器测试消息";
+  await input.fill(immediateMessage);
   await page.getByRole("button", { name: "发送", exact: true }).click();
+  await page
+    .locator("#health-chat")
+    .getByText(immediateMessage, { exact: true })
+    .waitFor({ timeout: 500 });
+  assert.equal(
+    await input.inputValue(),
+    "",
+    "the composer must clear as soon as the user message enters the conversation",
+  );
   await page.getByText("小满正在处理", { exact: true }).waitFor();
   await page.getByText("正在选择合适的健康工具", { exact: true }).waitFor();
   if (screenshotDirectory) {
@@ -187,6 +199,13 @@ test("desktop: history restores and a daily record opens its edit conversation",
     console.error(serverOutput);
     throw error;
   }
+  const renderedConversation = await page.locator("#health-chat").innerText();
+  const userMessageOccurrences = renderedConversation.split(immediateMessage).length - 1;
+  assert.equal(
+    userMessageOccurrences,
+    1,
+    "one submitted user message must render exactly once after the assistant responds",
+  );
   const processSummary = page.locator("details.agent-process summary").filter({ hasText: "本次处理" });
   await processSummary.waitFor();
   await processSummary.click();
@@ -251,6 +270,10 @@ test("wide desktop: the full-width shell keeps sidebar controls inside the navig
     .boundingBox();
   const conversationListLocator = page.locator("#sidebar-conversations");
   const conversationList = await conversationListLocator.boundingBox();
+  const lastPrimaryNavigation = await page
+    .locator('#main-tabs button[role="tab"]:visible')
+    .last()
+    .boundingBox();
 
   assert.ok(shell, "application shell must be rendered");
   assert.ok(shell.x <= 1 && shell.width >= 1919, "application shell must span a wide viewport");
@@ -272,10 +295,107 @@ test("wide desktop: the full-width shell keeps sidebar controls inside the navig
     conversationList && conversationList.y + conversationList.height <= 1000,
     "history scroller must stay inside the viewport",
   );
+  assert.ok(lastPrimaryNavigation, "the final primary navigation item must be visible");
+  const navigationToHistoryGap = conversationList.y - (
+    lastPrimaryNavigation.y + lastPrimaryNavigation.height
+  );
+  assert.ok(
+    navigationToHistoryGap >= 8 && navigationToHistoryGap <= 32,
+    `recent conversations must follow navigation without dead space: ${navigationToHistoryGap}px`,
+  );
   assert.equal(await page.getByText("本地真实数据", { exact: true }).count(), 0);
   if (screenshotDirectory) {
     fs.mkdirSync(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "desktop-wide.png"), fullPage: false });
+  }
+  await context.close();
+});
+
+test("desktop: the complete top bar stays together while scrolling", async () => {
+  const { context, page } = await openApp({ width: 1440, height: 600 });
+  await openNavigation(page, "趋势与报告");
+  await page.locator('.health-chart-water .metric-number').waitFor();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await page.waitForTimeout(100);
+
+  const scrollY = await page.evaluate(() => window.scrollY);
+  const topbar = await page.locator(".app-topbar").boundingBox();
+  const coachStyleLocator = page.locator("#topbar-coach-style");
+  const coachStyle = await coachStyleLocator.boundingBox();
+  const brand = await page.locator(".brand-shell").boundingBox();
+  const brandPosition = await page
+    .locator(".brand-shell")
+    .evaluate((element) => getComputedStyle(element).position);
+
+  assert.ok(scrollY > 100, `the fixture must actually scroll: ${scrollY}px`);
+  assert.ok(topbar, "the complete top bar must remain rendered");
+  assert.ok(coachStyle, "the coach style selector must remain rendered");
+  assert.ok(brand, "the brand must remain rendered while the page scrolls");
+  assert.equal(
+    brandPosition,
+    "fixed",
+    "the brand must be fixed to the viewport instead of moving with the document",
+  );
+  assert.ok(
+    brand.x >= -1 && brand.x <= 1 && brand.y >= -1 && brand.y <= 1,
+    `the brand must remain at the viewport origin: x=${brand.x}px y=${brand.y}px`,
+  );
+  assert.ok(
+    topbar.y >= -1 && topbar.y <= 1,
+    `the complete top bar must remain pinned to the viewport: ${topbar.y}px`,
+  );
+  assert.ok(
+    coachStyle.y >= topbar.y && coachStyle.y + coachStyle.height <= topbar.y + topbar.height,
+    "the coach style selector must stay inside the same visible top-bar band",
+  );
+  const coachStyleIsTopmost = await coachStyleLocator.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return Boolean(hit && (hit === element || element.contains(hit)));
+  });
+  assert.equal(coachStyleIsTopmost, true, "the coach style selector must not be covered by the top bar");
+  await page.getByText("非医疗服务", { exact: true }).waitFor();
+  const moreButton = page.getByRole("button", { name: "更多", exact: true });
+  await moreButton.waitFor();
+  assert.equal(await page.getByRole("tab", { name: "提醒", exact: true }).isVisible(), true);
+  assert.equal(await page.getByRole("tab", { name: "健康时间线", exact: true }).isVisible(), false);
+  await moreButton.click();
+  const moreButtonBox = await moreButton.boundingBox();
+  const moreMenu = page.locator("#mobileToolsMenu");
+  const moreMenuBox = await moreMenu.boundingBox();
+  assert.ok(moreButtonBox && moreMenuBox, "the open more menu and its trigger must remain rendered");
+  for (const name of ["今日完整汇总", "健康时间线", "数据与隐私"]) {
+    const menuItem = moreMenu.getByRole("button", { name, exact: true });
+    assert.equal(
+      await menuItem.isVisible(),
+      true,
+      `the expanded more menu must show ${name}`,
+    );
+    const menuItemIsTopmost = await menuItem.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return Boolean(hit && (hit === element || element.contains(hit)));
+    });
+    assert.equal(menuItemIsTopmost, true, `${name} must be visibly painted above the page content`);
+  }
+  assert.equal(
+    await moreMenu.getByRole("button", { name: "提醒", exact: true }).count(),
+    0,
+    "reminders belong in the primary sidebar instead of the more menu",
+  );
+  assert.ok(moreMenuBox.height >= 130, "the more menu must unfold enough to show every entry at once");
+  assert.ok(
+    Math.abs(moreMenuBox.x + moreMenuBox.width - (moreButtonBox.x + moreButtonBox.width)) <= 16,
+    "the more menu must align directly below the trigger's right edge",
+  );
+  assert.ok(
+    moreMenuBox.y >= moreButtonBox.y + moreButtonBox.height &&
+      moreMenuBox.y - (moreButtonBox.y + moreButtonBox.height) <= 12,
+    "the more menu must open immediately below the trigger",
+  );
+  if (screenshotDirectory) {
+    fs.mkdirSync(screenshotDirectory, { recursive: true });
+    await page.screenshot({ path: path.join(screenshotDirectory, "more-menu-desktop.png"), fullPage: false });
   }
   await context.close();
 });
@@ -393,22 +513,40 @@ test("desktop: meal images open a real review flow inside the conversation", asy
   ]);
   await fileChooser.setFiles(path.join(projectRoot, "tests/fixtures/meal.png"));
   await page.getByText("确认餐食信息", { exact: true }).waitFor();
-  await page.getByLabel("食物名称").fill("米饭");
-  await page.getByLabel("估计份量（g）").fill("150");
-  await page.getByRole("button", { name: "匹配食物", exact: true }).click();
-  await page.getByText(/最接近的食物|几种相近的食物/).waitFor();
-  const candidate = page.getByLabel("选择最接近的食物");
-  if (!(await candidate.inputValue()).trim()) {
-    await candidate.click();
-    await page.getByRole("option").filter({ hasText: /米饭/ }).first().click();
-  }
+  const workflowText = await page.locator(".chat-meal-workflow").innerText();
+  assert.doesNotMatch(
+    workflowText,
+    /识别成功|已识别出|置信度/,
+    "with detection disabled the page must not claim any recognition happened",
+  );
+  assert.match(
+    workflowText,
+    /图片只用于你自己核对/,
+    "with detection disabled the page must say the image is not analysed",
+  );
+  await page.getByLabel("吃的是什么").fill("米饭");
+  await page.getByLabel("吃了多少（克）").fill("150");
+  await page.getByLabel("吃了多少（克）").blur();
+  // 匹配和试算不再需要用户点按钮：填完名称失焦即自动匹配并预选。
+  await page.locator(".meal-candidate-select label").filter({ hasText: /米饭/ }).first().waitFor();
   assert.equal(await page.locator(".candidate-table").count(), 0);
   assert.equal(await page.getByText("查看候选检索证据", { exact: true }).count(), 0);
   assert.doesNotMatch(await page.locator("body").innerText(), /stage\s+\d|food_id|match_type/);
-  await page.getByRole("button", { name: "查看营养估算", exact: true }).click();
-  await page.getByText("待确认饮食记录", { exact: true }).waitFor();
-  await page.getByText(/尚未保存/).waitFor();
+  await page.getByText(/大约 \d+ 千卡/).waitFor();
+  await page.getByText(/点「保存这一餐」才会记下来/).waitFor();
   assert.equal(await page.getByText("查看确定性计算公式", { exact: true }).count(), 0);
+  await page.getByRole("button", { name: "保存这一餐", exact: true }).click();
+  await page.getByText("饮食记录已保存。今日概览已同步更新。", { exact: true }).waitFor();
+  assert.equal(
+    await page.getByText("确认餐食信息", { exact: true }).isVisible(),
+    false,
+    "the completed meal form must leave the conversation flow after save",
+  );
+  assert.equal(
+    await page.getByRole("button", { name: "添加图片", exact: true }).isVisible(),
+    true,
+    "the compact image entry must remain available for the next meal",
+  );
   if (screenshotDirectory) {
     fs.mkdirSync(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "meal-chat-desktop.png"), fullPage: true });
@@ -420,8 +558,46 @@ test("desktop: trends use the existing daily summaries without fabricated scores
   const { context, page } = await openApp({ width: 1440, height: 1000 });
   await openNavigation(page, "趋势与报告");
   await page.getByRole("button", { name: "刷新趋势", exact: true }).click();
-  await page.locator('#healthos-trends .cell-wrap:visible').filter({ hasText: "350 ml" }).waitFor();
-  await page.getByText(/1 天有数据/).waitFor();
+  await page.locator('.health-chart-water .metric-number').filter({ hasText: "350" }).waitFor();
+  assert.equal(await page.locator('.health-chart').count(), 4);
+  assert.equal(await page.locator('.hydration-cups > svg').count(), 16);
+  assert.equal(await page.locator('.calorie-tick').count(), 40);
+  assert.equal(await page.locator('.weight-gap').count(), 1);
+  assert.equal(await page.locator('.has-activity').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(193, 214, 237)');
+  assert.equal(await page.locator('.has-activity strong').evaluate(el => getComputedStyle(el).color), 'rgb(23, 62, 104)');
+  await page.locator('.health-chart-water summary').click();
+  await page.locator('.health-chart-water .chart-records').getByText('350 ml', { exact: true }).waitFor();
+  await page.locator('.health-chart-water summary').click();
+  for (const [name, width] of [["desktop", 1440], ["mobile", 390]]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    if (screenshotDirectory) {
+      fs.mkdirSync(screenshotDirectory, { recursive: true });
+      await page.screenshot({ path: path.join(screenshotDirectory, `trends-${name}.png`), fullPage: true });
+    }
+  }
+  await page.getByText(/2 天有数据/).waitFor();
+  await context.close();
+});
+
+test("goals: recorded progress and metadata fit desktop and mobile", async () => {
+  const { context, page } = await openApp({ width: 1440, height: 1000 });
+  await openNavigation(page, "目标与教练");
+  await page.locator('.health-goal meter').waitFor();
+  assert.equal(await page.locator('.health-goal meter').getAttribute('value'), '350');
+  assert.equal(await page.locator('.health-goal meter').getAttribute('max'), '2450');
+  await page.locator('.health-goal summary').click();
+  await page.locator('.health-goal details p').filter({ hasText: '第 1 版' }).waitFor();
+  for (const [name, width] of [["desktop", 1440], ["mobile", 390]]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    if (screenshotDirectory) {
+      fs.mkdirSync(screenshotDirectory, { recursive: true });
+      await page.screenshot({ path: path.join(screenshotDirectory, `goals-${name}.png`), fullPage: true });
+    }
+  }
   await context.close();
 });
 
@@ -499,13 +675,15 @@ test("mobile: primary chat controls stay inside the viewport and remain keyboard
       .slice(0, 12))
     : [];
   assert.ok(overflow <= 1, `page has ${overflow}px horizontal overflow: ${JSON.stringify(overflowSources)}`);
-  for (const name of ["今日观察", "对话", "健康时间线", "趋势与报告", "目标与教练"]) {
+  for (const name of ["今日观察", "对话", "提醒", "趋势与报告", "目标与教练"]) {
     assert.equal(await page.getByRole("tab", { name, exact: true }).isVisible(), true);
   }
+  assert.equal(await page.getByRole("tab", { name: "健康时间线", exact: true }).isVisible(), false);
   assert.equal(await page.getByRole("button", { name: "更多", exact: true }).isVisible(), true);
   const moreBox = await page.getByRole("button", { name: "更多", exact: true }).boundingBox();
   assert.ok(moreBox && moreBox.x >= 0 && moreBox.x + moreBox.width <= 390, "mobile more menu must fit the viewport");
   await page.getByRole("button", { name: "更多", exact: true }).click();
+  await page.locator("#mobileToolsMenu").getByRole("button", { name: "健康时间线", exact: true }).waitFor();
   await page.locator("#mobileToolsMenu").getByRole("button", { name: "数据与隐私", exact: true }).waitFor();
   await page.getByRole("button", { name: "更多", exact: true }).click();
   const topbarBox = await page.locator(".app-topbar").boundingBox();

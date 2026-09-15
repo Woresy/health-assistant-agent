@@ -362,5 +362,70 @@
     "source": "《中国食物成分表》第6版整理仓库（示例占位，仅供学习）",
     "source_version": "第6版；示例占位数据 v1",
     "updated_at": "2026-08-27"
+  },
+  {
+    "food_id": "FOOD_029",
+    "name": "三明治",
+    "aliases": ["总汇三明治", "夹心面包"],
+    "category": "复合菜",
+    "calories_per_100g": 250.0,
+    "protein_per_100g": 10.5,
+    "fat_per_100g": 11.0,
+    "carbs_per_100g": 27.0,
+    "source": "《中国食物成分表》第6版整理仓库（示例占位，仅供学习）",
+    "source_version": "第6版；示例占位数据 v1",
+    "updated_at": "2026-09-15"
+  },
+  {
+    "food_id": "FOOD_030",
+    "name": "热狗",
+    "aliases": ["热狗面包", "香肠面包"],
+    "category": "复合菜",
+    "calories_per_100g": 290.0,
+    "protein_per_100g": 10.8,
+    "fat_per_100g": 17.0,
+    "carbs_per_100g": 23.5,
+    "source": "《中国食物成分表》第6版整理仓库（示例占位，仅供学习）",
+    "source_version": "第6版；示例占位数据 v1",
+    "updated_at": "2026-09-15"
+  },
+  {
+    "food_id": "FOOD_031",
+    "name": "披萨",
+    "aliases": ["比萨", "意式薄饼"],
+    "category": "复合菜",
+    "calories_per_100g": 266.0,
+    "protein_per_100g": 11.0,
+    "fat_per_100g": 10.4,
+    "carbs_per_100g": 33.0,
+    "source": "《中国食物成分表》第6版整理仓库（示例占位，仅供学习）",
+    "source_version": "第6版；示例占位数据 v1",
+    "updated_at": "2026-09-15"
+  },
+  {
+    "food_id": "FOOD_032",
+    "name": "甜甜圈",
+    "aliases": ["多拿滋", "炸面圈"],
+    "category": "糕点甜点",
+    "calories_per_100g": 421.0,
+    "protein_per_100g": 4.9,
+    "fat_per_100g": 22.9,
+    "carbs_per_100g": 51.3,
+    "source": "《中国食物成分表》第6版整理仓库（示例占位，仅供学习）",
+    "source_version": "第6版；示例占位数据 v1",
+    "updated_at": "2026-09-15"
+  },
+  {
+    "food_id": "FOOD_033",
+    "name": "蛋糕",
+    "aliases": ["奶油蛋糕", "生日蛋糕"],
+    "category": "糕点甜点",
+    "calories_per_100g": 347.0,
+    "protein_per_100g": 4.5,
+    "fat_per_100g": 15.6,
+    "carbs_per_100g": 48.0,
+    "source": "《中国食物成分表》第6版整理仓库（示例占位，仅供学习）",
+    "source_version": "第6版；示例占位数据 v1",
+    "updated_at": "2026-09-15"
   }
 ]

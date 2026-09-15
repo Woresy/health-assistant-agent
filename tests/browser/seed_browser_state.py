@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -16,7 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.agent.models import AgentMessage, SessionState
 from src.health.models import HealthEvent
 from src.healthos.memory_control import sync_profile_memories
-from src.healthos.models import CoachStyle, UserProfile
+from src.healthos.models import CoachStyle, UserProfile, HealthGoal, GoalVersion
 from src.storage.sqlite_store import (
     SQLiteDatabase,
     SQLiteConversationStore,
@@ -52,6 +52,18 @@ def seed(database_path: Path) -> None:
         )
     )
 
+    for index, kind, payload, age in (
+        (4, "exercise", {"activity_type": "步行", "duration_minutes": 60}, 0),
+        (5, "weight", {"weight_kg": 67}, 0),
+        (6, "weight", {"weight_kg": 70}, 3),
+    ):
+        event_store.append(HealthEvent.model_validate({
+            "schema_version": "1.1", "event_id": str(UUID(int=index)),
+            "user_id": USER_ID, "event_type": kind,
+            "occurred_at": now - timedelta(days=age), "payload": payload,
+            "source_refs": [], "input_source": "chat", "created_at": now, "updated_at": now,
+        }))
+
     def add_profile(state: object) -> None:
         profile = UserProfile(
             user_id=USER_ID,
@@ -63,6 +75,15 @@ def seed(database_path: Path) -> None:
         )
         state.profiles[USER_ID] = profile  # type: ignore[attr-defined]
         sync_profile_memories(state, profile)
+        state.goals.append(HealthGoal(
+            goal_id=UUID("33333333-3333-3333-3333-333333333333"),
+            user_id=USER_ID,
+            versions=[GoalVersion(
+                version=1, title="每周饮水记录目标", goal_type="water",
+                target_value=2450, unit="ml", period="weekly",
+                reason="浏览器测试目标", created_at=now,
+            )],
+        ))
 
     healthos_store.update(add_profile)
 

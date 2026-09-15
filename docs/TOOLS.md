@@ -1,7 +1,7 @@
 # HealthOS Tool 清单与扩展策略
 
 本文以 `src/agent/tool_router.py` 中的 `TOOL_DEFINITIONS` 和
-`TOOL_CONTRACTS` 为实现依据，描述当前公开给模型的 15 个受控 Tool。
+`TOOL_CONTRACTS` 为实现依据，描述当前公开给模型的 16 个受控 Tool。
 
 ## 1. 公共约定
 
@@ -37,7 +37,7 @@ Router 还会区分三种调度结果：
 - `needs_clarification`：缺少关键字段，不调用领域 Tool，先向用户追问；
 - `invalid`：未知 Tool、Schema 校验失败或执行异常，不允许继续写入。
 
-## 2. 15 个 Tool 契约
+## 2. 16 个 Tool 契约
 
 | Tool | 作用 | 模型输入 | 主要输出 | 数据写入 | 用户确认 | 失败与恢复 |
 |---|---|---|---|---|---|---|
@@ -48,6 +48,7 @@ Router 还会区分三种调度结果：
 | `get_health_events` | 查询已确认的饮食、饮水、体重和运动事实 | 可选 `event_type`、`date`、`timezone_name`、`newest_first`、`limit`（1–500） | `events`、匹配数、返回数、实际过滤条件 | 否 | 否 | 日期、时区、类型或 limit 不合法时修正参数；存储失败时返回错误。结果可能很长，应分页或压缩后交给模型 |
 | `prepare_health_event` | 生成一条健康记录草稿 | `event_type`、可选时间；饮水需 `amount_ml`；体重需 `weight_kg`；运动需类型和时长；饮食需完整计算结果与来源 | 规范化事件、用户预览、确认令牌、幂等键、令牌有效期 | 本次调用不写；确认后写入事件库 | 是，保存前确认 | 缺字段时定向追问；参数不合法时修正；令牌失效或草稿被改动时必须重新生成，禁止绕过确认 |
 | `prepare_event_change` | 为已有记录生成修改对比或删除草稿 | `operation=update/delete`、`event_id`；修改还需 `patch` | 修改时返回当前值与建议值；删除时返回目标记录；均含令牌和幂等键 | 本次调用不写；确认后修改或删除 | 是，执行前确认 | 找不到记录时重新查询；相同内容不更新；修改餐食营养时先重新检索和计算，再生成完整草稿 |
+| `detect_food` | 对已上传餐食图片做识别，只产出建议检索词用于预填（后端可为本地 YOLOv8n 或远程 VLM） | `image_path`（1–1024 字符，服务端已校验过的图片） | `status`、`mode`、`model_version`、`detections`（`label`、`label_zh`、`confidence`、`bbox`、`suggested_query`）、`candidate_source=model`、检测 Trace 与可选 Trace 告警 | 不写健康事实；会尽力追加检测 Trace | 否 | 后端不可用返回 `DETECTION_UNAVAILABLE`；本地推理失败返回 `DETECTION_INFERENCE_FAILED`；VLM 调用失败返回 `DETECTION_PROVIDER_FAILED`，返回结构无法解析返回 `DETECTION_PROVIDER_PROTOCOL`；以上一律回退人工填写；识别不到返回 `no_detection` 而不是编造候选；Trace 写入失败只返回 `trace_warning`，不推翻检测结果 |
 | `retrieve_nutrition_candidates` | 检索 Top-K 标准食物候选 | `query`（1–64 字符）、`top_k`（1–10，默认 5） | 候选、匹配分数、来源、Retrieval Trace、可选 Trace 告警 | 不写健康事实；会尽力追加检索 Trace | 否 | 查询或 Top-K 非法时修正；数据源失败时返回错误；Trace 写入失败不推翻主结果，只返回 `trace_warning` |
 | `calculate_nutrition` | 基于选中数据行和克重确定性计算营养 | `food_code`、`grams`（大于 0 且不超过 10000）、`retrieval_query` | 食物数据行、份量、营养结果、公式“每 100g × 克重 ÷ 100” | 否 | 否 | 食物不存在时重新检索；克重或数据异常时停止计算，不让模型补造营养值 |
 | `retrieve_health_knowledge` | 检索带来源的一般健康知识并执行安全边界 | `question`（1–500 字符）、`top_k`（1–5，默认 3） | `answer_scope`、带 URL 和更新时间的 citations、数量 | 否 | 否 | 未命中则明确证据不足；医疗、用药、紧急风险或提示注入触发拒答/就医引导，不自动重试绕过边界 |
@@ -83,13 +84,13 @@ Tool，因此清单保持 15 个。Webhook 和签名密钥永远不进入 Tool S
 
 ## 4. 推荐的 Tool 选择策略
 
-保留服务端 15 个 Tool 的完整白名单，但每轮只给模型一个与当前意图相关的子集：
+保留服务端 16 个 Tool 的完整白名单，但每轮只给模型一个与当前意图相关的子集：
 
 | 能力包 | 建议注入的 Tool |
 |---|---|
 | 今日与查询 | `get_health_events`、`get_daily_summary`、`get_period_summary` |
 | 新增/修改记录 | `get_health_events`、`prepare_health_event`、`prepare_event_change` |
-| 餐食营养 | `retrieve_nutrition_candidates`、`calculate_nutrition`、`prepare_health_event` |
+| 餐食营养 | `detect_food`、`retrieve_nutrition_candidates`、`calculate_nutrition`、`prepare_health_event` |
 | 档案与目标 | `get_user_profile`、`prepare_profile_update`、`get_health_goals`、`prepare_goal_change`、`get_period_summary` |
 | 健康知识 | `retrieve_health_knowledge` |
 | 提醒 | `create_reminder_draft`、`list_or_cancel_reminders`；`execute_reminder` 由确认中间件调用 |
@@ -102,7 +103,7 @@ Tool，因此清单保持 15 个。Webhook 和签名密钥永远不进入 Tool S
 4. 服务端 Router 仍执行完整白名单、权限、Schema、超时和确认校验，动态选择不能代替安全边界；
 5. `execute_reminder` 等真正写入执行器不进入常规模型 Tool 集，由受信任代码调用。
 
-15 个 Tool 暂时不需要再增加一个 `search_tools` 元工具。多一次工具发现往返的收益有限，意图能力包更简单、更可测试。
+16 个 Tool 暂时不需要再增加一个 `search_tools` 元工具。多一次工具发现往返的收益有限，意图能力包更简单、更可测试。
 
 ## 5. 防止搜索结果撑大上下文
 

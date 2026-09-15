@@ -15,6 +15,10 @@ services:
       SQLITE_DATABASE_PATH: /app/runtime/healthos.db
       AGENT_TRACE_PATH: /app/runtime/agent_traces.jsonl
       RAG_MODE: ${RAG_MODE:-lexical}
+      # 权重不在镜像里；放到 ./runtime-data/models/ 即可被下面的挂载带进容器。
+      MEAL_DETECTION_MODE: ${MEAL_DETECTION_MODE:-disabled}
+      MEAL_DETECTION_MODEL_PATH: /app/runtime/models/yolov8n.onnx
+      MEAL_DETECTION_MIN_CONFIDENCE: ${MEAL_DETECTION_MIN_CONFIDENCE:-0.35}
       AGENT_PROVIDER_MODE: ${AGENT_PROVIDER_MODE:-disabled}
       AGENT_API_KEY: ${AGENT_API_KEY:-}
       AGENT_BASE_URL: ${AGENT_BASE_URL:-https://api.openai.com/v1}

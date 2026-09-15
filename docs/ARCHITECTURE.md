@@ -12,7 +12,8 @@
 - Agent Trace：`data/agent_traces.jsonl`；
 - 营养检索 Trace：`data/traces.jsonl`；
 - LangGraph checkpoint：P0 使用进程内 `InMemorySaver`，只保存短期会话状态；
-- 图片默认不长期保存；
+- 图片默认不长期保存；`MEAL_DETECTION_MODE=vlm` 时图片会发送给所配置的
+  多模态 Provider，界面对此显式告知，其余模式下图片不出本机；
 - HealthOS P1 档案、目标版本和提醒：SQLite 分表保存；
 - 对话会话：SQLite `conversation_sessions` 表，浏览器刷新或进程重启后可恢复；
 - 模型不能直接执行保存、修改或删除。
@@ -203,9 +204,9 @@ SQLite Store 和 JSONL Trace，因此切换编排器不会迁移或改变已保�
 
 ## HealthOS P1 工具与状态
 
-Router 对模型只公开 PRD 规定的 15 个工具：档案 2 个、目标 2 个、健康事实 3 个、
-营养 2 个、知识 1 个、汇总 2 个和提醒 3 个。P0 的旧工具名称只在内部保留为
-兼容别名，不再出现在 Provider Tool Schema 中。
+Router 对模型只公开 PRD 规定的 16 个工具：档案 2 个、目标 2 个、健康事实 3 个、
+视觉 1 个、营养 2 个、知识 1 个、汇总 2 个和提醒 3 个。P0 的旧工具名称只在内部
+保留为兼容别名，不再出现在 Provider Tool Schema 中。
 
 档案、目标和提醒使用同一个确认中间件：
 

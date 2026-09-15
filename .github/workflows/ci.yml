@@ -106,3 +106,54 @@ jobs:
             /tmp/healthos-performance.json
             /tmp/healthos-release-check.json
           if-no-files-found: error
+
+  detection-smoke:
+    # 真实权重冒烟单独成 job：导出需要 ultralytics + torch（约 2GB），
+    # 放进主 job 会让每次 docker build 都多等这笔下载。
+    # 权重与导出结果按固定版本缓存，命中后这个 job 只跑几秒。
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Resolve detection weights pin
+        id: detection
+        run: >-
+          python scripts/prepare_food_detection_model.py
+          --emit-pin >> "$GITHUB_OUTPUT"
+
+      - name: Cache exported detection weights
+        id: weights-cache
+        uses: actions/cache@v4
+        with:
+          path: runtime/models
+          key: yolo-${{ runner.os }}-${{ steps.detection.outputs.cache_key }}
+
+      - name: Install runtime dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Install export-only dependencies
+        if: steps.weights-cache.outputs.cache-hit != 'true'
+        run: >-
+          python -m pip install --disable-pip-version-check
+          ultralytics
+          --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: Download and export YOLOv8n weights
+        if: steps.weights-cache.outputs.cache-hit != 'true'
+        run: python scripts/prepare_food_detection_model.py
+
+      - name: Real-weights detection smoke
+        env:
+          AGENT_PROVIDER_MODE: disabled
+          RAG_MODE: lexical
+          MEAL_DETECTION_MODE: onnx
+        run: python -m pytest tests/integration -q

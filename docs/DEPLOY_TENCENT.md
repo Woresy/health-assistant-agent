@@ -165,10 +165,40 @@ docker compose \
 恢复数据库属于覆盖操作：必须先停止应用、额外保存当前数据库，再替换
 `runtime-data/healthos.db`。
 
+## 8.5 可选：开启图片食物识别
+
+镜像里没有检测权重——本项目是 MIT，而 Ultralytics YOLOv8 的权重是 AGPL-3.0，
+不随镜像分发。构建阶段也不做导出：那会给每次构建多下载约 2GB 的 torch。
+
+在**宿主机**导出一次，放进已经挂载的持久目录即可：
+
+```bash
+# 在一个临时虚拟环境里导出，不污染服务器运行环境
+python3 -m venv /tmp/yolo-export
+/tmp/yolo-export/bin/pip install ultralytics
+/tmp/yolo-export/bin/python scripts/prepare_food_detection_model.py
+
+# runtime/ 已经通过 ./runtime-data:/app/runtime 挂载进容器
+mkdir -p deploy/tencent/runtime-data/models
+cp runtime/models/yolov8n.onnx deploy/tencent/runtime-data/models/
+cp runtime/models/detection_manifest.json deploy/tencent/runtime-data/models/
+rm -rf /tmp/yolo-export
+```
+
+然后在 `production.env` 里设置 `MEAL_DETECTION_MODE=onnx` 并重启：
+
+```bash
+docker compose --env-file production.env -f compose.yaml up -d
+```
+
+验收：上传一张苹果或香蕉的照片，"食物名称"应当被自动填好，"估计份量"仍然空白。
+权重没放对时页面会说明缺什么、怎么补，手填链路照常可用。
+
 ## 9. 当前边界
 
 - Basic Auth 保护整个站点，但所有访问者仍共享同一个 `local-demo-user`；
 - SQLite 适合当前单用户、单实例作品集，不适合多实例 SaaS；
 - 服务器停机期间提醒无法准时发送，恢复后才会继续处理待发送任务；
 - 2 核 4GB 适合 Lexical RAG 和 YOLO nano 级 CPU 推理，不适合大型视觉模型或高并发；
-- Hybrid RAG 和 YOLO 上线前应重新测量内存、冷启动与图片响应时间。
+- Hybrid RAG 和 YOLO 上线前应重新测量内存、冷启动与图片响应时间；
+- 图片识别只认 COCO 的 10 个食物类，中餐菜品识别不到，不能对外宣称通用识别。

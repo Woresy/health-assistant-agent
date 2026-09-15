@@ -91,7 +91,7 @@ def test_four_stage_search_and_explainability() -> None:
     assert rejected.status == "not_found"
     assert rejected.candidates == []
     assert rejected.auto_select_allowed is False
-    assert rejected.dataset_record_count == 28
+    assert rejected.dataset_record_count == 33
 
 
 @pytest.mark.parametrize("top_k", [True, 0, 11, 1.5, "3"])

@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "note": "COCO 80 类里只有 10 个食物类。这里只映射这 10 类，不做任何扩展猜测；检索词用于喂给现有的 Hybrid RAG，expected_food_id 只用于测试守卫，运行时不参与选中。",
+  "labels": [
+    {
+      "class_id": 46,
+      "coco_label": "banana",
+      "query": "香蕉",
+      "expected_food_id": "FOOD_006"
+    },
+    {
+      "class_id": 47,
+      "coco_label": "apple",
+      "query": "苹果",
+      "expected_food_id": "FOOD_005"
+    },
+    {
+      "class_id": 48,
+      "coco_label": "sandwich",
+      "query": "三明治",
+      "expected_food_id": "FOOD_029"
+    },
+    {
+      "class_id": 49,
+      "coco_label": "orange",
+      "query": "橙",
+      "expected_food_id": "FOOD_015"
+    },
+    {
+      "class_id": 50,
+      "coco_label": "broccoli",
+      "query": "西兰花",
+      "expected_food_id": "FOOD_013"
+    },
+    {
+      "class_id": 51,
+      "coco_label": "carrot",
+      "query": "胡萝卜",
+      "expected_food_id": "FOOD_025"
+    },
+    {
+      "class_id": 52,
+      "coco_label": "hot dog",
+      "query": "热狗",
+      "expected_food_id": "FOOD_030"
+    },
+    {
+      "class_id": 53,
+      "coco_label": "pizza",
+      "query": "披萨",
+      "expected_food_id": "FOOD_031"
+    },
+    {
+      "class_id": 54,
+      "coco_label": "donut",
+      "query": "甜甜圈",
+      "expected_food_id": "FOOD_032"
+    },
+    {
+      "class_id": 55,
+      "coco_label": "cake",
+      "query": "蛋糕",
+      "expected_food_id": "FOOD_033"
+    }
+  ]
+}

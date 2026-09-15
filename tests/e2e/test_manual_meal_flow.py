@@ -31,8 +31,17 @@ from src.tools.confirmation import (
 from src.tools.save_health_event import (
     save_health_event,
 )
+from src.tools.detect_food import (
+    detect_food,
+)
 from src.ui.image_input import (
     validate_image,
+)
+from src.vision.config import (
+    FoodDetectionConfig,
+)
+from src.vision.factory import (
+    build_food_detector,
 )
 
 
@@ -493,4 +502,164 @@ def test_manual_meal_recording_vertical_slice(
             .splitlines()
         )
         == 1
+    )
+
+def test_full_meal_chain_works_with_detection_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRD 要求：关闭视觉模型后，上传图片加人工候选仍能完成完整主链。"""
+
+    monkeypatch.setenv(
+        "MEAL_DETECTION_MODE",
+        "disabled",
+    )
+
+    config = (
+        FoodDetectionConfig
+        .from_environment()
+    )
+
+    assert config.available is False
+    assert (
+        build_food_detector(config)
+        is None
+    )
+
+    detection = detect_food(
+        FIXTURE_IMAGE,
+        config=config,
+    )
+
+    assert detection["ok"] is False
+    assert (
+        detection["error"][
+            "error_code"
+        ]
+        == "DETECTION_UNAVAILABLE"
+    )
+    # 缺项说明必须告诉用户现在还能做什么。
+    assert (
+        "手动填写"
+        in detection["error"]["message"]
+    )
+
+    # 识别不可用不影响校验、检索、计算和保存。
+    assert (
+        validate_image(
+            FIXTURE_IMAGE
+        ).ok
+        is True
+    )
+
+    repository = FoodRepository(
+        FOODS_PATH,
+        rag_mode="lexical",
+    )
+    search_result = (
+        repository.search(
+            "西红柿",
+            top_k=3,
+        )
+    )
+
+    assert (
+        search_result.status == "ok"
+    )
+
+    food = (
+        repository.get_by_food_id(
+            "FOOD_001"
+        )
+    )
+    estimate = calculate_nutrition(
+        food=food,
+        raw_grams=150,
+        retrieval_query="西红柿",
+    )
+
+    store_path = (
+        tmp_path
+        / "health_events.jsonl"
+    )
+    store = HealthEventStore(
+        store_path
+    )
+    now = datetime.now(
+        timezone.utc
+    )
+    event = HealthEvent.model_validate({
+        "schema_version": "1.0",
+        "event_id": str(uuid4()),
+        "user_id": "local-user",
+        "event_type": "meal",
+        "occurred_at": (
+            now.isoformat()
+        ),
+        "payload": {
+            "food": {
+                "food_id": (
+                    food.food_id
+                ),
+                "name": food.name,
+                "category": (
+                    food.category
+                ),
+            },
+            "portion": {
+                "grams": 150.0,
+                "unit": "g",
+            },
+            "nutrition": (
+                estimate.model_dump(
+                    mode="json"
+                )
+            ),
+            "retrieval_query": (
+                "西红柿"
+            ),
+            "candidate_source": (
+                "manual"
+            ),
+            "estimated": True,
+        },
+        "source_refs": [
+            estimate.source_ref
+        ],
+        "input_source": "image",
+        "created_at": (
+            now.isoformat()
+        ),
+        "updated_at": (
+            now.isoformat()
+        ),
+    })
+
+    saved = save_health_event(
+        event_input=event,
+        confirmation_token=(
+            issue_confirmation_token(
+                event
+            )
+        ),
+        idempotency_key=(
+            "e2e-detection-off-001"
+        ),
+        store=store,
+    )
+
+    assert saved["ok"] is True
+
+    persisted = json.loads(
+        store_path.read_text(
+            encoding="utf-8"
+        )
+        .splitlines()[0]
+    )
+
+    assert (
+        persisted["payload"][
+            "candidate_source"
+        ]
+        == "manual"
     )

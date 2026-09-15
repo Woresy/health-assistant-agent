@@ -3,6 +3,7 @@ pydantic==2.13.4
 Pillow==12.3.0
 pytest==9.1.1
 numpy==2.4.6
+onnxruntime==1.30.0
 sentence-transformers==6.0.0
 huggingface-hub==1.28.0
 openai==3.1.0

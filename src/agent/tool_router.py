@@ -36,6 +36,9 @@ from src.nutrition.repository import FoodRepository
 from src.tools.delete_health_event import (
     delete_health_event,
 )
+from src.tools.detect_food import (
+    detect_food,
+)
 from src.tools.get_daily_health_summary import (
     get_daily_health_summary,
 )
@@ -72,6 +75,7 @@ from src.tools.healthos import (
     retrieve_health_knowledge,
     retrieve_nutrition_candidates,
 )
+from src.vision.detector import FoodDetector
 
 
 ToolDispatchStatus = Literal[
@@ -511,6 +515,10 @@ class PrepareEventChangeArguments(ToolInputModel):
         return {**data, "patch": normalized.get("patch")}
 
 
+class DetectFoodArguments(ToolInputModel):
+    image_path: str = Field(min_length=1, max_length=1024)
+
+
 class NutritionCandidatesArguments(ToolInputModel):
     query: str = Field(min_length=1, max_length=64)
     top_k: int = Field(default=5, ge=1, le=10)
@@ -595,6 +603,13 @@ TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "饮食的食物或份量变化必须先重新检索并计算营养，再把完整结果放在 patch.payload。",
         PrepareEventChangeArguments,
     ),
+    _definition(
+        "detect_food",
+        "对已上传的餐食图片做检测，只返回建议检索词和置信度用于预填；"
+        "不选中食物、不计算营养、不保存。识别结果必须再经 "
+        "retrieve_nutrition_candidates 检索并由用户确认。",
+        DetectFoodArguments,
+    ),
     _definition("retrieve_nutrition_candidates", "检索 Top-K 标准食物候选并返回来源和分数。", NutritionCandidatesArguments),
     _definition("calculate_nutrition", "只使用选中食物数据行和克重确定性计算营养。", NutritionCalculationArguments),
     _definition("retrieve_health_knowledge", "检索带引用的一般健康知识；医疗或紧急问题拒答。", HealthKnowledgeArguments),
@@ -613,6 +628,7 @@ TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
     "get_health_events": {"risk_level": "read", "timeout_seconds": 5, "confirmation": False},
     "prepare_health_event": {"risk_level": "draft", "timeout_seconds": 5, "confirmation": True},
     "prepare_event_change": {"risk_level": "draft", "timeout_seconds": 5, "confirmation": True},
+    "detect_food": {"risk_level": "inference", "timeout_seconds": 15, "confirmation": False},
     "retrieve_nutrition_candidates": {"risk_level": "retrieval", "timeout_seconds": 15, "confirmation": False},
     "calculate_nutrition": {"risk_level": "calculation", "timeout_seconds": 5, "confirmation": False},
     "retrieve_health_knowledge": {"risk_level": "retrieval", "timeout_seconds": 5, "confirmation": False},
@@ -673,6 +689,7 @@ _FOLLOW_UP_QUESTIONS = {
     "goal_fields": "请补充目标名称、数值、单位和周期。",
     "reminder_content": "你希望我提醒什么？",
     "scheduled_for": "请告诉我提醒的具体日期和时间。",
+    "image_path": "请先用输入框下方的「添加图片」上传一张餐食照片。",
 }
 
 
@@ -733,6 +750,17 @@ def _find_missing_parameters(
     """按照工具和事件类型确定必填参数。"""
 
     canonical_name = _TOOL_ALIASES.get(tool_name, tool_name)
+
+    if canonical_name == "detect_food":
+        if _is_missing(
+            arguments,
+            "image_path",
+        ):
+            return (
+                "image_path",
+            )
+
+        return ()
 
     if canonical_name == (
         "prepare_health_event"
@@ -904,12 +932,16 @@ class HealthToolRouter:
         *,
         healthos_store: HealthOSStore | None = None,
         nutrition_repository: FoodRepository | None = None,
+        food_detector: FoodDetector | None = None,
     ) -> None:
         self._store = store
         self._healthos_store = healthos_store or HealthOSStore(
             Path(__file__).resolve().parents[2] / "data" / "healthos_state.json"
         )
         self._nutrition_repository = nutrition_repository or FoodRepository()
+        # 检测器保持可选：没有权重时 detect_food 返回 DETECTION_UNAVAILABLE，
+        # 其余工具不受影响。
+        self._food_detector = food_detector
         self._available_tools = tuple(
             item["function"]["name"] for item in TOOL_DEFINITIONS
         )
@@ -1335,6 +1367,13 @@ class HealthToolRouter:
                     patch=validated.patch,
                     idempotency_key=_idempotency_key(session_id=session_id, call_id=call_id),
                     store=self._store,
+                )
+
+            elif canonical_name == "detect_food":
+                validated = DetectFoodArguments.model_validate(canonical_arguments)
+                result = detect_food(
+                    image_path=validated.image_path,
+                    detector=self._food_detector,
                 )
 
             elif canonical_name == "retrieve_nutrition_candidates":

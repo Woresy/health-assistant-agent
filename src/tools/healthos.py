@@ -1,4 +1,4 @@
-"""HealthOS P1 的 15 个受控工具及统一结果协议。"""
+"""HealthOS P1 的 16 个受控工具及统一结果协议。"""
 
 from __future__ import annotations
 

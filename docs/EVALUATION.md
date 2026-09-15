@@ -13,7 +13,7 @@ Hybrid 评测。以下 `run_eval.py` 命令仅用于单独调试一种模式。
 
 `tests/eval/nutrition_retrieval.jsonl` 固定包含 20 条查询，覆盖标准名、别名、
 口语名、复合菜、相似食物、错别字和明确拒答。所有非空
-`expected_food_codes` 都是 28 条公开示例中真实存在的 `FOOD_0xx`。
+`expected_food_codes` 都是 33 条公开示例中真实存在的 `FOOD_0xx`。
 
 只运行默认 Lexical 评测：
 
@@ -30,7 +30,7 @@ python scripts/run_eval.py
 
 任一门槛不满足时退出码为 1；评测集或数据文件无效时退出码为 2。
 
-当前 28 条示例数据的实测报告为：Recall@3 `0.9474`、Top1 Accuracy
+当前 33 条示例数据的实测报告为：Recall@3 `0.9474`、Top1 Accuracy
 `0.9474`、Rejection Accuracy `1.0`、Overall Pass Rate `0.95`。当前唯一失败
 用例是错别字“蕃茄”；系统选择拒答而不是猜测营养数据，因此仍通过 P0 的
 Recall@3 `>= 0.85` 和拒答准确率门槛。

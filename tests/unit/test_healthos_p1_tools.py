@@ -22,6 +22,7 @@ EXPECTED_TOOLS = (
     "get_health_events",
     "prepare_health_event",
     "prepare_event_change",
+    "detect_food",
     "retrieve_nutrition_candidates",
     "calculate_nutrition",
     "retrieve_health_knowledge",
@@ -66,10 +67,10 @@ def pending_from(result: Any, tool_name: str) -> PendingConfirmation:
     )
 
 
-def test_exactly_fifteen_public_tool_contracts(router: HealthToolRouter) -> None:
+def test_exactly_sixteen_public_tool_contracts(router: HealthToolRouter) -> None:
     assert router.available_tools == EXPECTED_TOOLS
     schemas = router.tool_definitions
-    assert len(schemas) == 15
+    assert len(schemas) == 16
     assert tuple(item["function"]["name"] for item in schemas) == EXPECTED_TOOLS
     assert all(item["function"]["parameters"]["additionalProperties"] is False for item in schemas)
     assert set(router.tool_contracts) == set(EXPECTED_TOOLS)

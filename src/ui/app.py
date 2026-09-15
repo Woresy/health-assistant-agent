@@ -14,6 +14,8 @@ from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from src.ui.health_charts import goal_cards, trend_charts
+
 import gradio as gr
 from dotenv import load_dotenv
 
@@ -102,6 +104,9 @@ from src.tools.healthos import (
     list_or_cancel_reminders,
 )
 from src.ui.image_input import validate_image
+from src.tools.detect_food import detect_food
+from src.vision.config import FoodDetectionConfig
+from src.vision.factory import build_food_detector
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -202,16 +207,25 @@ APP_HEAD = """
       const reminders = resolveTab("healthos-reminders", "提醒");
       const evidence = resolveTab("healthos-evidence", "运行证据");
       const privacy = resolveTab("healthos-privacy", "数据与隐私");
-      [today, conversations, trends, goals, timeline].forEach((tab) => {
+      [today, conversations, trends, goals, reminders].forEach((tab) => {
         if (tab) tab.dataset.healthosNav = "primary";
       });
       if (todaySummary) todaySummary.dataset.healthosNav = "support";
       if (conversations) conversations.dataset.healthosDesktop = "hidden";
-      if (reminders) reminders.dataset.healthosNav = "support";
+      if (reminders) delete reminders.dataset.healthosDesktop;
+      if (timeline) {
+        timeline.dataset.healthosNav = "utility";
+        timeline.dataset.healthosDesktop = "hidden";
+      }
       if (evidence) evidence.dataset.healthosNav = "utility-start";
-      if (privacy) privacy.dataset.healthosNav = "utility";
+      // 「数据与隐私」统一从右上角「更多」进入（该菜单在所有宽度下都可见），
+      // 侧边栏只保留日常记录会反复用到的页面。
+      if (privacy) {
+        privacy.dataset.healthosNav = "utility";
+        privacy.dataset.healthosDesktop = "hidden";
+      }
       if (!nav.dataset.healthosOrdered) {
-        [today, conversations, trends, goals, timeline, evidence, privacy, todaySummary, reminders]
+        [today, conversations, trends, goals, reminders, evidence, timeline, privacy, todaySummary]
           .filter(Boolean)
           .forEach((tab) => nav.appendChild(tab));
         nav.dataset.healthosOrdered = "true";
@@ -232,16 +246,15 @@ APP_HEAD = """
         label.textContent = "系统控制";
         nav.insertBefore(label, evidence);
       }
-      if (reminders && !nav.querySelector('[data-healthos-group="tools"]')) {
+      if (timeline && !nav.querySelector('[data-healthos-group="tools"]')) {
         const label = document.createElement("span");
         label.dataset.healthosGroup = "tools";
         label.className = "healthos-nav-group";
         label.setAttribute("aria-hidden", "true");
         label.textContent = "记录工具";
-        nav.insertBefore(label, reminders);
+        nav.insertBefore(label, timeline);
       }
 
-      const topbarTitle = document.querySelector(".app-topbar > div h1");
       const pageNames = new Map([
         [today, "今日观察"], [conversations, "历史对话"], [trends, "趋势与报告"],
         [goals, "目标与教练"], [timeline, "健康时间线"],
@@ -253,7 +266,10 @@ APP_HEAD = """
         if (!tab || tab.dataset.healthosTitleBound) return;
         tab.dataset.healthosTitleBound = "true";
         tab.addEventListener("click", () => {
-          if (topbarTitle) topbarTitle.textContent = title;
+          // 顶栏是 Markdown 组件，重渲染后旧引用会变成游离节点，
+          // 所以每次点击都重新取一次，否则标题会一直停在首页。
+          const heading = document.querySelector(".app-topbar > div h1");
+          if (heading) heading.textContent = title;
         });
       });
 
@@ -261,6 +277,8 @@ APP_HEAD = """
       let menu = document.querySelector("#mobileToolsMenu");
       if (!toggle || !menu) {
         const topActions = document.querySelector(".app-topbar > p");
+        // 顶栏还没渲染好时直接返回，避免把菜单挂到 body 上留下点不到的副本。
+        if (!topActions) return;
         toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "mobile-tools-toggle";
@@ -270,8 +288,8 @@ APP_HEAD = """
         menu = document.createElement("div");
         menu.id = "mobileToolsMenu";
         menu.className = "mobile-tools-menu";
-        topActions?.appendChild(toggle);
-        (topActions || document.body).appendChild(menu);
+        topActions.appendChild(toggle);
+        topActions.appendChild(menu);
       }
       if (!document.documentElement.dataset.healthosMenuBound) {
         document.documentElement.dataset.healthosMenuBound = "true";
@@ -293,11 +311,15 @@ APP_HEAD = """
           window.setTimeout(() => today.click(), 0);
         });
       }
-      [
+      const menuEntries = [
         ["今日完整汇总", todaySummary],
-        ["提醒", reminders],
-        ["运行证据", evidence], ["数据与隐私", privacy],
-      ].forEach(([key, tab]) => {
+        ["健康时间线", timeline],
+        ["数据与隐私", privacy],
+      ];
+      if (window.__healthosShowDeveloperUi) {
+        menuEntries.splice(2, 0, ["运行证据", evidence]);
+      }
+      menuEntries.forEach(([key, tab]) => {
         if (menu.querySelector(`[data-healthos-tool="${key}"]`)) return;
         const item = document.createElement("button");
         item.type = "button";
@@ -387,6 +409,15 @@ SHOW_DEVELOPER_UI = os.getenv(
     "false",
 ).strip().casefold() in {"1", "true", "yes", "on"}
 
+# 「运行证据」页在普通用户模式下是隐藏 Tab，导航菜单必须同步隐藏，
+# 否则菜单里会出现一个点了没有反应的入口。
+APP_HEAD = APP_HEAD.replace(
+    "<script>",
+    "<script>window.__healthosShowDeveloperUi = "
+    f"{'true' if SHOW_DEVELOPER_UI else 'false'};",
+    1,
+)
+
 
 repository = FoodRepository()
 
@@ -428,12 +459,29 @@ if FEISHU_CONFIG.available:
     )
 else:
     reminder_scheduler = None
-    REMINDER_AUTOMATION_STATUS = "飞书自动发送未连接，暂时无法创建提醒"
+    REMINDER_AUTOMATION_STATUS = (
+        "飞书自动发送未连接，提醒还发不出去；"
+        "在 .env 设置 FEISHU_REMINDER_ENABLED=true 和 "
+        "FEISHU_WEBHOOK_URL 后重启应用即可开启"
+    )
+
+DETECTION_CONFIG = FoodDetectionConfig.from_environment()
+# 权重或 onnxruntime 缺失时是 None；识别只是预填增强项，缺它不挡任何事。
+food_detector = build_food_detector(DETECTION_CONFIG)
+
+if DETECTION_CONFIG.available:
+    # 图片外发的说明放在「数据与隐私」页和 README，不占对话区的版面。
+    MEAL_WORKFLOW_STEPS = "名称已经按图片填好，核对一下，再选个份量就行。"
+else:
+    MEAL_WORKFLOW_STEPS = (
+        "填上名称和份量就行，热量会自动算。图片只用于你自己核对。"
+    )
 
 tool_router = HealthToolRouter(
     event_store,
     healthos_store=healthos_store,
     nutrition_repository=repository,
+    food_detector=food_detector,
 )
 
 agent_trace_store = AgentTraceStore(
@@ -462,10 +510,76 @@ try:
     )
 except AgentConfigurationError as exc:
     agent_model = None
+    AGENT_CONFIGURATION_ERROR = str(exc)
     AGENT_PROVIDER_STATUS = (
         "Agent 配置错误："
         f"{exc}"
     )
+else:
+    AGENT_CONFIGURATION_ERROR = ""
+
+
+AGENT_SETUP_STEPS = (
+    "AGENT_PROVIDER_MODE=openai_compatible、"
+    "AGENT_API_KEY、AGENT_MODEL"
+)
+
+
+def _agent_unavailable_reason() -> str:
+    """说明对话记录为什么用不了，并给出唯一的下一步。"""
+
+    if AGENT_CONFIGURATION_ERROR:
+        return (
+            "对话记录还不能用：模型配置有错误——"
+            f"{AGENT_CONFIGURATION_ERROR}。"
+            "请修正项目根目录 .env 中的这一项后重启应用。"
+        )
+    return (
+        "对话记录还不能用：还没有连接模型服务，"
+        "所以我无法把你说的话整理成可确认的草稿。"
+        "请在项目根目录的 .env 里填好 "
+        f"{AGENT_SETUP_STEPS}，然后重启应用"
+        "（没有 .env 时先执行 cp .env.example .env）。"
+    )
+
+
+def _setup_notice_html() -> str:
+    """在用户开口之前，先集中说明唯一挡路的缺项和补齐方式。"""
+
+    if AGENT_CONFIGURATION_ERROR:
+        detail = (
+            "模型配置有错误："
+            f"{escape(AGENT_CONFIGURATION_ERROR)}。"
+            "修正 .env 中的这一项后重启应用。"
+        )
+    else:
+        detail = (
+            "对话记录需要一个支持工具调用的模型服务，现在还没有连接。"
+            "在项目根目录的 .env 里填好 "
+            f"<code>{escape(AGENT_SETUP_STEPS)}</code>，"
+            "然后重启应用；还没有 .env 时先执行 "
+            "<code>cp .env.example .env</code>。"
+        )
+
+    return (
+        '<section class="setup-notice-card">'
+        "<strong>还差一步才能用对话记录</strong>"
+        f"<p>{detail}</p>"
+        "<p>在那之前，下面的快捷按钮和发送不会保存任何内容。"
+        "现在就可以用的是：输入框下方的「添加图片」手动记一餐"
+        "（不需要模型），以及「今天」「健康时间线」「趋势与报告」。</p>"
+        "</section>"
+    )
+
+
+AGENT_UNAVAILABLE_ANSWER = (
+    f"{_agent_unavailable_reason()}\n\n"
+    "刚才这句话没有写入任何健康记录，"
+    "输入框里的内容我保留着，配置好后可以直接重发。\n\n"
+    "现在不配置也能做的事：用输入框下方的「添加图片」"
+    "手动记一餐（这条路径不需要模型），"
+    "以及查看「今天」「健康时间线」「趋势与报告」。"
+)
 
 
 _AGENT_SESSIONS: dict[
@@ -1397,6 +1511,26 @@ def begin_agent_activity(
     )
 
 
+def stage_chat_message(
+    user_text: str,
+    history: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], str, str]:
+    """立即回显用户消息，并为后台处理保留原始文本。"""
+
+    chat_history = list(history or [])
+    normalized_text = user_text.strip() if isinstance(user_text, str) else ""
+    if not normalized_text:
+        return chat_history, "", ""
+
+    chat_history.append(
+        {
+            "role": "user",
+            "content": normalized_text,
+        }
+    )
+    return chat_history, "", normalized_text
+
+
 def _visible_tool_step(step: dict[str, Any]) -> tuple[str, str]:
     """把脱敏工具证据转换为用户可理解的处理步骤。"""
 
@@ -1422,6 +1556,7 @@ def _visible_tool_step(step: dict[str, Any]) -> tuple[str, str]:
 def finish_agent_activity(
     status_text: str,
     tool_steps: list[dict[str, Any]] | None,
+    agent_state: dict[str, Any] | None = None,
 ) -> Any:
     """保留本轮可核验的处理摘要，同时隐藏模型内部推理。"""
 
@@ -1431,8 +1566,21 @@ def finish_agent_activity(
         else "本轮处理已结束。"
     )
 
+    turn_state = (
+        str(agent_state.get("state", ""))
+        if isinstance(agent_state, dict)
+        else ""
+    )
+    executed = turn_state not in {
+        "provider_disabled",
+        "provider_error",
+    }
+
     visible_steps = [
-        ("理解你的请求与当前对话", "已完成"),
+        (
+            "理解你的请求与当前对话",
+            "已完成" if executed else "未执行",
+        ),
     ]
     visible_steps.extend(
         _visible_tool_step(step)
@@ -1454,7 +1602,8 @@ def finish_agent_activity(
             "<summary>"
             '<span class="process-mark" aria-hidden="true"></span>'
             "<div><strong>本次处理</strong>"
-            f"<small>已完成 · {len(visible_steps)} 个步骤</small></div>"
+            f"<small>{'已完成' if executed else '没有执行，也没有写入'}"
+            f" · {len(visible_steps)} 个步骤</small></div>"
             "<b>查看</b>"
             "</summary>"
             f"<ol>{items}</ol>"
@@ -2020,8 +2169,8 @@ def refresh_today_margin() -> str:
     )
 
 
-def refresh_trends(period_days: int = 7) -> tuple[list[list[Any]], str]:
-    """用现有每日汇总组合逐日趋势表，不推断因果。"""
+def refresh_trends(period_days: int = 7) -> tuple[str, str]:
+    """用已确认的每日汇总生成可视化，保留缺失日期。"""
 
     try:
         days = int(period_days)
@@ -2033,10 +2182,10 @@ def refresh_trends(period_days: int = 7) -> tuple[list[list[Any]], str]:
     try:
         active_timezone = _timezone()
     except ValueError as exc:
-        return [], _error_text("TIMEZONE_INVALID", str(exc))
+        return "", _error_text("TIMEZONE_INVALID", str(exc))
 
     final_date = datetime.now(active_timezone).date()
-    rows: list[list[Any]] = []
+    samples: list[tuple[str, dict[str, Any]]] = []
     total_events = 0
     days_with_data = 0
 
@@ -2051,49 +2200,16 @@ def refresh_trends(period_days: int = 7) -> tuple[list[list[Any]], str]:
         )
         if not result["ok"]:
             error = result["error"]
-            return [], _error_text(error["error_code"], error["message"])
+            return "", _error_text(error["error_code"], error["message"])
 
         summary = result["data"]["summary"]
-        meal = summary["meal"]
-        water = summary["water"]
-        exercise = summary["exercise"]
-        weight = summary["weight"]
         event_count = int(summary["event_count"])
-        category_count = sum(
-            int(summary[key]["count"]) > 0
-            for key in ("meal", "water", "exercise", "weight")
-        )
         total_events += event_count
         days_with_data += int(event_count > 0)
-        rows.append(
-            [
-                selected_date.strftime("%m月%d日"),
-                (
-                    f"{int(meal['count'])} 顿 · {float(meal['calories_kcal']):.0f} kcal"
-                    if int(meal["count"])
-                    else "未记录"
-                ),
-                (
-                    f"{float(water['total_ml']):.0f} ml"
-                    if int(water["count"])
-                    else "未记录"
-                ),
-                (
-                    f"{float(exercise['total_duration_minutes']):.0f} 分钟"
-                    if int(exercise["count"])
-                    else "未记录"
-                ),
-                (
-                    f"{float(weight['latest_weight_kg']):g} kg"
-                    if weight["latest_weight_kg"] is not None
-                    else "未记录"
-                ),
-                f"{category_count} 类 · {event_count} 条",
-            ]
-        )
+        samples.append((selected_date.strftime("%m/%d"), summary))
 
     return (
-        rows,
+        trend_charts(list(reversed(samples))),
         (
             f"最近 {days} 天共有 {total_events} 条已确认记录，"
             f"其中 {days_with_data} 天有数据。未记录项不会按零计算。"
@@ -2149,7 +2265,12 @@ def _profile_markdown(profile: dict[str, Any]) -> str:
         if quiet_start and quiet_end
         else "未设置"
     )
-    reminder_text = "开启" if profile.get("reminders_enabled", True) else "关闭"
+    if not profile.get("reminders_enabled", True):
+        reminder_text = "关闭"
+    elif FEISHU_CONFIG.available:
+        reminder_text = "开启"
+    else:
+        reminder_text = "开启（发送通道未连接）"
     return (
         '<section class="profile-summary">'
         '<div><span>教练风格</span>'
@@ -2163,29 +2284,6 @@ def _profile_markdown(profile: dict[str, Any]) -> str:
         f'<small>忌口：{escape("、".join(exclusions) if exclusions else "未设置")}</small></div>'
         '</section>'
     )
-
-
-def _goal_rows(goals: list[dict[str, Any]]) -> list[list[Any]]:
-    """目标表格只展示业务含义，不展示内部 ID。"""
-
-    rows: list[list[Any]] = []
-    for goal in goals:
-        versions = goal.get("versions") or []
-        if not versions:
-            continue
-        current = versions[-1]
-        created = str(current.get("created_at", ""))
-        rows.append(
-            [
-                current.get("title", "健康目标"),
-                f"{current.get('target_value', '')} {current.get('unit', '')}",
-                _GOAL_PERIOD_LABELS.get(str(current.get("period", "")), str(current.get("period", ""))),
-                _GOAL_STATUS_LABELS.get(str(current.get("status", "")), str(current.get("status", ""))),
-                f"第 {current.get('version', len(versions))} 版",
-                created[:10] if created else "未记录",
-            ]
-        )
-    return rows
 
 
 def _reminder_cards(reminders: list[dict[str, Any]]) -> str:
@@ -2317,7 +2415,7 @@ def refresh_healthos_dashboard(period_days: int = 7) -> tuple[Any, ...]:
             str(error.get("error_code", "HEALTHOS_READ_ERROR")),
             str(error.get("message", "无法读取 HealthOS 数据")),
         )
-        return status, [], status, [], status
+        return status, "", status, "", status
 
     profile = profile_result["data"]["profile"]
     goals = goals_result["data"]["goals"]
@@ -2325,7 +2423,7 @@ def refresh_healthos_dashboard(period_days: int = 7) -> tuple[Any, ...]:
     reminders = reminders_result["data"]["reminders"]
     return (
         _profile_markdown(profile),
-        _goal_rows(goals),
+        goal_cards(goals, period),
         _checkin_markdown(period, goals),
         _reminder_cards(reminders),
         f"已读取 {sum(item.get('delivery_channel') == 'feishu' for item in reminders)} 条飞书提醒；"
@@ -2473,24 +2571,57 @@ def open_knowledge_question() -> tuple[Any, str, dict[str, Any], Any]:
     return open_healthos_action("我想询问一个一般健康生活问题，请给出可信来源：")
 
 
+REMINDER_SETUP_HINT = (
+    '<div class="setup-notice-card">'
+    "<strong>提醒还发不出去</strong>"
+    "<p>提醒只通过飞书发送，现在还没有连接发送通道。"
+    "在项目根目录的 .env 里设置 "
+    "<code>FEISHU_REMINDER_ENABLED=true</code> 和 "
+    "<code>FEISHU_WEBHOOK_URL</code>（群机器人 Webhook 地址），"
+    "重启应用后再回到这里。</p>"
+    "<p>在那之前你仍然可以正常记录、查看今天和时间线；"
+    "下面写好的内容不会丢，连接后直接发送即可。</p>"
+    "</div>"
+)
+
+
+def _open_reminder_action(prompt: str) -> tuple[Any, str, dict[str, Any], Any]:
+    """提醒相关入口先说明发送通道是否可用，再进入确认链路。"""
+
+    tabs, text, state, context = open_healthos_action(prompt)
+    if FEISHU_CONFIG.available:
+        return tabs, text, state, context
+    return (
+        tabs,
+        text,
+        state,
+        gr.Markdown(
+            value=REMINDER_SETUP_HINT,
+            visible=True,
+            sanitize_html=False,
+            container=False,
+        ),
+    )
+
+
 def open_reminder_creation() -> tuple[Any, str, dict[str, Any], Any]:
-    return open_healthos_action("我想创建一个飞书提醒：")
+    return _open_reminder_action("我想创建一个飞书提醒：")
 
 
 def open_active_check_in() -> tuple[Any, str, dict[str, Any], Any]:
     """用可编辑自然语言进入确认链路，默认值不会直接启用任务。"""
 
-    return open_healthos_action(
+    return _open_reminder_action(
         "我想每天晚上 9 点通过飞书主动问我，关注饮食、饮水和运动"
     )
 
 
 def open_reminder_management() -> tuple[Any, str, dict[str, Any], Any]:
-    return open_healthos_action("请列出我的飞书提醒，我想修改、延后、暂停、恢复或取消其中一个。")
+    return _open_reminder_action("请列出我的飞书提醒，我想修改、延后、暂停、恢复或取消其中一个。")
 
 
 def _tool_contract_rows() -> list[list[str]]:
-    """为开发者证据页展示 15 个工具的安全契约。"""
+    """为开发者证据页展示 16 个工具的安全契约。"""
 
     boundaries = {
         "get_user_profile": "最小字段",
@@ -2500,6 +2631,7 @@ def _tool_contract_rows() -> list[list[str]]:
         "get_health_events": "仅 committed 事实",
         "prepare_health_event": "缺参追问",
         "prepare_event_change": "展示前后对比",
+        "detect_food": "只预填候选词",
         "retrieve_nutrition_candidates": "Top-K 与来源",
         "calculate_nutrition": "确定性公式",
         "retrieve_health_knowledge": "引用与拒答",
@@ -2514,6 +2646,7 @@ def _tool_contract_rows() -> list[list[str]]:
         "draft": "草稿",
         "retrieval": "检索",
         "calculation": "计算",
+        "inference": "推理",
         "write": "写入",
         "read_or_draft": "读取/草稿",
     }
@@ -2868,15 +3001,374 @@ def search_candidates(
     )
 
 
+def refresh_meal_panel(
+    image_path: str | None,
+    food_query: str,
+    selected_food_id: str | None,
+    raw_grams: Any,
+    detected_query: str = "",
+) -> tuple[
+    gr.Radio,
+    str,
+    str,
+    dict[str, Any] | None,
+    dict[str, Any],
+]:
+    """名称、候选或份量一变就重新匹配并试算。
+
+    用户不需要点「匹配食物」「查看营养估算」——那两步是系统的内部动作，
+    不是用户要做的决定。用户只需要决定两件事：吃的是什么、吃了多少。
+    """
+
+    blank_radio = gr.Radio(choices=[], value=None, visible=False)
+
+    if not str(food_query or "").strip():
+        return (
+            blank_radio,
+            "",
+            "",
+            None,
+            {},
+        )
+
+    image_result = validate_image(image_path)
+    if not image_result.ok:
+        return (
+            blank_radio,
+            _error_text(
+                image_result.error_code or "IMAGE_INVALID",
+                image_result.message,
+            ),
+            "",
+            None,
+            {},
+        )
+
+    tool_result = retrieve_nutrition_candidates(
+        query=food_query,
+        top_k=5,
+        repository=repository,
+    )
+
+    if not tool_result["ok"]:
+        error = tool_result["error"]
+        return (
+            blank_radio,
+            _error_text(
+                error["error_code"],
+                error["message"],
+            ),
+            "",
+            None,
+            {},
+        )
+
+    data = tool_result["data"]
+    trace = data["trace"]
+    candidates = data["candidates"]
+
+    if data["status"] == "not_found" or not candidates:
+        return (
+            blank_radio,
+            (
+                f"食物库里没有「{food_query.strip()}」。"
+                "换个更常见的说法试试，例如「米饭」「鸡蛋」；"
+                "查不到就不会给出热量，不会替你猜。"
+            ),
+            "",
+            None,
+            trace,
+        )
+
+    choices = _candidate_choices(candidates)
+    candidate_ids = {item["food_id"] for item in candidates}
+
+    # 用户已经选过的优先保留，否则精确命中时替他预选。
+    if selected_food_id in candidate_ids:
+        active_id = selected_food_id
+    else:
+        active_id = _exact_match_food_id(candidates)
+
+    matched = next(
+        (c for c in candidates if c["food_id"] == active_id),
+        None,
+    )
+
+    if matched is None:
+        status = "这个名字对应好几种食物，选一个你吃的："
+    elif len(candidates) == 1:
+        status = f"用的是食物库里的「{matched['name']}」。"
+    else:
+        status = (
+            f"用的是食物库里的「{matched['name']}」，"
+            "不对的话在下面换一个。"
+        )
+
+    radio = gr.Radio(
+        choices=choices,
+        value=active_id,
+        visible=True,
+        label=None,
+    )
+
+    if active_id is None or _grams_is_blank(raw_grams):
+        hint = (
+            "选好食物后填份量，热量会自动算出来。"
+            if active_id is None
+            else "填上份量就能看到热量。"
+        )
+        return (radio, status, hint, None, trace)
+
+    summary, preview_state, _, _ = calculate_meal_preview(
+        image_path,
+        food_query,
+        active_id,
+        raw_grams,
+        detected_query,
+    )
+
+    return (radio, status, summary, preview_state, trace)
+
+
+def use_portion_preset(grams: int) -> str:
+    """份量快捷按钮只是替用户打字。"""
+
+    return str(grams)
+
+
+def prefill_candidates_after_detection(
+    image_path: str | None,
+    detected_query: str,
+) -> tuple[
+    gr.Dropdown,
+    str,
+    dict[str, Any],
+]:
+    """检测出名称后顺带预填候选下拉；没识别出来就保持空白。"""
+
+    if not detected_query.strip():
+        return (
+            gr.Dropdown(choices=[], value=None),
+            "",
+            {},
+        )
+
+    return search_candidates(image_path, detected_query)
+
+
+def _format_detection_status(
+    data: dict[str, Any],
+) -> tuple[str, str]:
+    """把检测结果转成界面文案和预填检索词。"""
+
+    detections = data.get("detections") or []
+
+    if not detections:
+        if DETECTION_CONFIG.mode == "onnx":
+            return (
+                "没有识别出可靠的食物。"
+                "本地权重只认得苹果、香蕉、橙、西兰花、胡萝卜、"
+                "披萨、三明治、热狗、甜甜圈和蛋糕，"
+                "中餐菜品识别不到。请直接填写食物名称和份量。",
+                "",
+            )
+
+        return (
+            "没有识别出可靠的食物，请直接填写食物名称和份量。",
+            "",
+        )
+
+    top = detections[0]
+    confidence_text = f"{float(top['confidence']) * 100:.0f}%"
+    # 同一类别可能有多个检测框（三个番茄 = 三个 apple），
+    # 这里按名称去重，否则文案会变成"已识别出苹果……还检测到：苹果"。
+    others: list[str] = []
+    for detection in detections[1:]:
+        name = str(detection["label_zh"])
+        if name != top["label_zh"] and name not in others:
+            others.append(name)
+
+    status = (
+        f"已识别出**{top['label_zh']}**"
+        f"（置信度 {confidence_text}），"
+        "名称已经替你填好，请核对后填写份量。"
+    )
+
+    if others:
+        status += (
+            "图中还检测到：" + "、".join(others) + "。"
+            "如果要记的是其中一项，直接改写上面的名称即可。"
+        )
+
+    status += "识别只负责填名称，营养值仍然按你选中的食物数据和份量计算。"
+
+    return status, str(top["suggested_query"])
+
+
 def open_meal_image_workflow(
     image_path: str | None,
-) -> tuple[gr.Column, str | None]:
-    """在对话中展开已上传餐食图片的核对流程。"""
+) -> tuple[gr.Column, str | None, str, str, str]:
+    """展开餐食核对流程，并尽力用检测结果预填食物名称。
+
+    检测不可用、失败或识别不到时一律回退到手动填写，
+    不显示任何识别结论，也不阻断后面的检索、计算和保存。
+    """
+
+    workflow = gr.Column(visible=bool(image_path))
+
+    if not image_path:
+        return (workflow, image_path, "", "", "")
+
+    if not DETECTION_CONFIG.available:
+        return (
+            workflow,
+            image_path,
+            "",
+            DETECTION_CONFIG.unavailable_reason() or "",
+            "",
+        )
+
+    tool_result = detect_food(
+        image_path=image_path,
+        detector=food_detector,
+        config=DETECTION_CONFIG,
+    )
+
+    if not tool_result["ok"]:
+        error = tool_result["error"]
+
+        return (
+            workflow,
+            image_path,
+            "",
+            _error_text(
+                error["error_code"],
+                error["message"] + "；请直接手动填写食物名称和份量。",
+            ),
+            "",
+        )
+
+    status, suggested_query = _format_detection_status(
+        tool_result["data"]
+    )
 
     return (
-        gr.Column(visible=bool(image_path)),
+        workflow,
         image_path,
+        suggested_query,
+        status,
+        suggested_query,
     )
+
+
+# 界面提供的常用份量，只是替用户省去打字，不是对某种食物的份量断言。
+PORTION_PRESETS: tuple[int, ...] = (50, 100, 150, 200, 300)
+
+# 检索层的 auto_select_allowed 恒为 False，含义是"检索不替用户确认"。
+# 界面层可以在**精确命中**时预选一个候选，但必须满足两件事：
+#   1. 用的是哪条食物数据全程显示在卡片上，可一键更换；
+#   2. 仍然要用户点「保存这一餐」才写入。
+# 所以"同意"从"点下拉框"变成了"点保存"，没有任何一步是静默的。
+EXACT_MATCH_TYPES = frozenset({"standard_name", "alias"})
+
+
+def _exact_match_food_id(
+    candidates: list[dict[str, Any]],
+) -> str | None:
+    """命中标准名或人工维护的别名时，返回可以预选的 food_id。
+
+    包含匹配和模糊匹配一律返回 None——那些情况系统确实不确定，
+    必须让用户自己挑。
+    """
+
+    if not candidates:
+        return None
+
+    top = candidates[0]
+
+    if top.get("match_type") not in EXACT_MATCH_TYPES:
+        return None
+
+    # 第一名和第二名都算精确命中时，说明有歧义（例如"橙"和"柑橘"），
+    # 不替用户决定。
+    if len(candidates) > 1 and candidates[1].get(
+        "match_type"
+    ) in EXACT_MATCH_TYPES:
+        return None
+
+    return str(top["food_id"])
+
+
+def _candidate_choices(
+    candidates: list[dict[str, Any]],
+) -> list[tuple[str, str]]:
+    """候选的可读标签。"""
+
+    return [
+        (
+            f"{candidate['name']} · {candidate['category']}",
+            candidate["food_id"],
+        )
+        for candidate in candidates
+    ]
+
+
+def _grams_is_blank(raw_grams: Any) -> bool:
+    """份量是否根本没填。
+
+    Gradio 的 Number 在清空时给 None，在某些交互后给 0；
+    两者对用户都是"还没填"，不该当成非法数值报错。
+    """
+
+    if raw_grams is None:
+        return True
+
+    if isinstance(raw_grams, str) and not raw_grams.strip():
+        return True
+
+    try:
+        return float(raw_grams) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _missing_input_text(missing: list[str]) -> str:
+    """告诉用户还差哪几格，而不是抛一句校验失败。"""
+
+    tail = (
+        "营养值只按你选中的那条食物数据和你填的份量换算，不会替你猜。"
+    )
+
+    if len(missing) == 1:
+        return (
+            f"还差一步：请先{missing[0]}，"
+            f"再点「查看营养估算」。{tail}"
+        )
+
+    steps = "；".join(
+        f"{index}. {item}"
+        for index, item in enumerate(missing, start=1)
+    )
+
+    return (
+        f"还差 {len(missing)} 项：{steps}。"
+        f"补齐后再点「查看营养估算」。{tail}"
+    )
+
+
+def _resolve_candidate_source(
+    food_query: str,
+    detected_query: str,
+) -> str:
+    """名称原样来自检测才算 model，用户改过一个字就回到 manual。"""
+
+    if not detected_query.strip():
+        return "manual"
+
+    if food_query.strip() != detected_query.strip():
+        return "manual"
+
+    return "model"
 
 
 def calculate_meal_preview(
@@ -2884,6 +3376,7 @@ def calculate_meal_preview(
     food_query: str,
     selected_food_id: str | None,
     raw_grams: Any,
+    detected_query: str = "",
 ) -> tuple[
     str,
     dict[str, Any] | None,
@@ -2934,17 +3427,26 @@ def calculate_meal_preview(
             in search_result.candidates
         }
 
+        # 一次把缺的都说清楚，不要用户点一次补一项。
+        missing: list[str] = []
+
         if (
             not selected_food_id
             or selected_food_id
             not in candidate_ids
         ):
+            missing.append(
+                "在「选择最接近的食物」里选中一个候选"
+            )
+
+        if _grams_is_blank(raw_grams):
+            missing.append(
+                "填写「估计份量（g）」"
+            )
+
+        if missing:
             return (
-                _error_text(
-                    "CANDIDATE_REQUIRED",
-                    "请选择当前检索结果"
-                    "中的一个候选。",
-                ),
+                _missing_input_text(missing),
                 None,
                 "",
                 "",
@@ -3020,7 +3522,10 @@ def calculate_meal_preview(
                     food_query.strip()
                 ),
                 "candidate_source": (
-                    "manual"
+                    _resolve_candidate_source(
+                        food_query,
+                        detected_query,
+                    )
                 ),
                 "estimated": True,
             },
@@ -3054,17 +3559,16 @@ def calculate_meal_preview(
 
     preview_state = draft_result["data"]
 
+    # 先给一眼能看懂的结论，再给明细。用"千卡""克"而不是 kcal/g，
+    # 用"大约"而不是"估算值"——后者是内部说法，用户只关心准不准。
     summary = (
-        "### 待确认饮食记录\n\n"
-        f"- 食物：{food.name}\n"
-        f"- 份量：{float(grams):g} g\n"
-        f"- 热量估算：{estimate.calories_kcal:.2f} kcal\n"
-        f"- 蛋白质估算：{estimate.protein_g:.2f} g\n"
-        f"- 脂肪估算：{estimate.fat_g:.2f} g\n"
-        f"- 碳水估算：{estimate.carbs_g:.2f} g\n"
-        "\n营养值参考食物成分数据，并按你填写的份量换算。\n\n"
-        "**尚未保存。以上均为估算值，"
-        "仅供学习，不构成医疗建议。**"
+        f"### {food.name} {float(grams):g} 克 "
+        f"大约 {estimate.calories_kcal:.0f} 千卡\n\n"
+        f"蛋白质 {estimate.protein_g:.1f} 克 · "
+        f"脂肪 {estimate.fat_g:.1f} 克 · "
+        f"碳水 {estimate.carbs_g:.1f} 克\n\n"
+        "数值按食物成分表换算，是大概值。"
+        "点「保存这一餐」才会记下来，这不是医疗建议。"
     )
 
     return (
@@ -3083,9 +3587,26 @@ def confirm_meal_save(
         dict[str, Any]
         | None
     ),
+    history: (
+        list[dict[str, Any]]
+        | None
+    ),
 ) -> tuple[
     str,
     list[list[Any]],
+    str,
+    str,
+    None,
+    list[dict[str, Any]],
+    None,
+    None,
+    gr.Column,
+    str,
+    str,
+    gr.Radio,
+    str,
+    str,
+    str,
     str,
 ]:
     """明确点击后保存饮食草稿。"""
@@ -3094,13 +3615,24 @@ def confirm_meal_save(
         rows, summary = refresh_today()
 
         return (
-            _error_text(
-                "PREVIEW_REQUIRED",
-                "请先完成检索和"
-                "营养计算。",
-            ),
+            "还不能保存：请先填好食物名称和份量，"
+            "点「匹配食物」，选中一个候选，"
+            "再点「查看营养估算」生成待确认记录。",
             rows,
             summary,
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
         )
 
     result = save_health_event(
@@ -3132,6 +3664,19 @@ def confirm_meal_save(
             ),
             rows,
             summary,
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
         )
 
     if result["data"]["idempotent"]:
@@ -3145,10 +3690,31 @@ def confirm_meal_save(
             "今日概览已同步更新。"
         )
 
+    chat_history = list(history or [])
+    chat_history.append(
+        {
+            "role": "assistant",
+            "content": status,
+        }
+    )
+
     return (
-        status,
+        "",
         rows,
         summary,
+        "",
+        None,
+        chat_history,
+        None,
+        None,
+        gr.Column(visible=False),
+        "",
+        "",
+        gr.Radio(choices=[], value=None, visible=False),
+        "",
+        "",
+        "",
+        "",
     )
 
 
@@ -3160,20 +3726,29 @@ def cancel_meal_preview() -> tuple[
     None,
     None,
     gr.Column,
+    str,
+    str,
+    gr.Radio,
+    str,
+    str,
+    str,
 ]:
     """取消饮食草稿。"""
 
     return (
         None,
-        (
-            "已取消，未写入"
-            "任何饮食记录。"
-        ),
-        "尚未计算待确认记录。",
+        "已取消，没有记录任何东西。",
+        "",
         "",
         None,
         None,
         gr.Column(visible=False),
+        "",
+        "",
+        gr.Radio(choices=[], value=None, visible=False),
+        "",
+        "",
+        "",
     )
 
 
@@ -3227,23 +3802,12 @@ def send_chat_message(
             gr.skip(),
         )
 
-    chat_history.append(
-        {
-            "role": "user",
-            "content": normalized_text,
-        }
-    )
-
     session = _get_agent_session(
         request
     )
 
     if session is None:
-        answer = (
-            "对话功能暂时不可用。"
-            "你仍可以添加餐食图片，"
-            "或查看今天的健康记录。"
-        )
+        answer = AGENT_UNAVAILABLE_ANSWER
 
         chat_history.append(
             {
@@ -3254,7 +3818,7 @@ def send_chat_message(
 
         return (
             chat_history,
-            "",
+            normalized_text,
             AGENT_PROVIDER_STATUS,
             [],
             {
@@ -3308,10 +3872,12 @@ def send_chat_message(
             model_text
         )
 
-    except AgentProviderError:
+    except AgentProviderError as exc:
         answer = (
-            "暂时无法连接对话服务，请稍后再试。"
-            "刚才的内容没有写入健康记录。"
+            f"这次没能联系上模型服务：{exc}。\n\n"
+            "刚才的内容没有写入健康记录，"
+            "输入框里的原话我保留着，"
+            "处理完上面这一项后可以直接重发。"
         )
 
         chat_history.append(
@@ -3323,7 +3889,7 @@ def send_chat_message(
 
         return (
             chat_history,
-            "",
+            normalized_text,
             answer,
             [],
             {
@@ -3892,6 +4458,14 @@ def build_demo() -> gr.Blocks:
                             min_width=112,
                         )
 
+                    gr.Markdown(
+                        _setup_notice_html(),
+                        sanitize_html=False,
+                        container=False,
+                        visible=agent_model is None,
+                        elem_classes="setup-notice",
+                    )
+
                     with gr.Column(
                         scale=0,
                         min_width=0,
@@ -3954,6 +4528,7 @@ def build_demo() -> gr.Blocks:
                             )
                         )
                     )
+                    pending_agent_text = gr.State(value="")
                     meal_preview_state = gr.State(value=None)
 
                     with gr.Row(
@@ -4033,15 +4608,21 @@ def build_demo() -> gr.Blocks:
                                 elem_classes="chat-meal-workflow",
                             ) as meal_image_workflow:
                                 gr.Markdown(
-                                    """
+                                    f"""
                                     <div class="chat-meal-heading">
                                       <strong>确认餐食信息</strong>
-                                      <span>告诉我们图片中的食物和大致份量，确认无误后再保存。</span>
+                                      <span>{MEAL_WORKFLOW_STEPS}</span>
                                     </div>
                                     """,
                                     sanitize_html=False,
                                     container=False,
                                 )
+
+                                detection_status = gr.Markdown(
+                                    container=False,
+                                    elem_classes="meal-inline-status",
+                                )
+                                detected_query_state = gr.State(value="")
 
                                 with gr.Row(
                                     equal_height=False,
@@ -4058,39 +4639,47 @@ def build_demo() -> gr.Blocks:
                                         elem_classes="chat-meal-fields",
                                     ):
                                         food_query = gr.Textbox(
-                                            label="食物名称",
+                                            label="吃的是什么",
                                             placeholder="例如：西红柿炒蛋",
                                         )
-                                        grams_input = gr.Number(
-                                            label="估计份量（g）",
-                                            minimum=0.01,
-                                            maximum=10000,
+                                        # 用 Textbox 而不是 Number：Number 的
+                                        # 客户端校验会抢在服务端之前弹英文
+                                        # toast，而且会把空值渲染成 0，看着
+                                        # 像已经填了。数值交给 parse_grams。
+                                        grams_input = gr.Textbox(
+                                            label="吃了多少（克）",
+                                            value="",
+                                            placeholder="例如 150",
+                                            lines=1,
+                                            max_lines=1,
                                         )
+                                        with gr.Row(
+                                            elem_classes="meal-portion-presets",
+                                        ):
+                                            portion_buttons = [
+                                                gr.Button(
+                                                    f"{grams}g",
+                                                    variant="secondary",
+                                                    size="sm",
+                                                    min_width=48,
+                                                )
+                                                for grams in PORTION_PRESETS
+                                            ]
 
-                                search_button = gr.Button(
-                                    "匹配食物",
-                                    variant="secondary",
-                                )
                                 candidate_status = gr.Markdown(
                                     container=False,
                                     elem_classes="meal-inline-status",
                                 )
-                                selected_food = gr.Dropdown(
-                                    label="选择最接近的食物",
+                                selected_food = gr.Radio(
                                     choices=[],
                                     value=None,
+                                    visible=False,
                                     interactive=True,
-                                )
-                                calculate_button = gr.Button(
-                                    "查看营养估算",
-                                    variant="primary",
-                                )
-                                calculation_status = gr.Markdown(
                                     container=False,
-                                    elem_classes="meal-inline-status",
+                                    elem_classes="meal-candidate-select",
                                 )
                                 meal_preview = gr.Markdown(
-                                    "尚未生成待确认记录。",
+                                    "",
                                     elem_classes="meal-preview",
                                 )
 
@@ -4100,11 +4689,11 @@ def build_demo() -> gr.Blocks:
                                     elem_classes="meal-confirm-actions",
                                 ):
                                     meal_cancel_button = gr.Button(
-                                        "取消草稿",
+                                        "取消",
                                         variant="secondary",
                                     )
                                     meal_save_button = gr.Button(
-                                        "确认保存",
+                                        "保存这一餐",
                                         variant="primary",
                                     )
                                 meal_save_status = gr.Markdown(
@@ -4261,7 +4850,7 @@ def build_demo() -> gr.Blocks:
                     gr.Markdown(
                         """
                         <div class="page-title">
-                          <h2>先看见关联，再谈改变。</h2>
+                          <h2>把身体的变化，看得更清楚。</h2>
                           <p>这里只排列已确认事实，不生成健康分数，也不把未记录解释为零。</p>
                         </div>
                         """,
@@ -4289,23 +4878,7 @@ def build_demo() -> gr.Blocks:
                         )
 
                     with gr.Column(elem_classes="trend-ledger"):
-                        trend_table = gr.Dataframe(
-                            headers=[
-                                "日期",
-                                "饮食",
-                                "饮水",
-                                "运动",
-                                "体重",
-                                "记录情况",
-                            ],
-                            datatype=["str", "str", "str", "str", "str", "str"],
-                            value=[],
-                            interactive=False,
-                            show_label=False,
-                            max_height=560,
-                            wrap=True,
-                            elem_classes="trend-table",
-                        )
+                        trend_table = gr.HTML(value="", elem_id="health-trend-charts")
                         trend_status = gr.Markdown(
                             container=False,
                             elem_classes="trend-status",
@@ -4397,16 +4970,7 @@ def build_demo() -> gr.Blocks:
                             manage_goal_button = gr.Button(
                                 "调整目标", variant="secondary", size="sm", scale=0
                             )
-                        goals_table = gr.Dataframe(
-                            headers=["目标", "目标值", "周期", "状态", "版本", "更新时间"],
-                            datatype=["str", "str", "str", "str", "str", "str"],
-                            value=[],
-                            interactive=False,
-                            show_label=False,
-                            max_height=320,
-                            wrap=True,
-                            elem_classes="goals-table",
-                        )
+                        goals_table = gr.HTML(value="", elem_id="health-goal-cards")
 
                     refresh_healthos_button = gr.Button(
                         "刷新目标与设置",
@@ -4499,7 +5063,7 @@ def build_demo() -> gr.Blocks:
                     )
 
                     with gr.Accordion(
-                        "HealthOS · 15 个受控工具契约",
+                        "HealthOS · 16 个受控工具契约",
                         open=False,
                     ):
                         gr.Markdown(
@@ -4878,54 +5442,96 @@ def build_demo() -> gr.Blocks:
                 show_progress="hidden",
             )
 
-        image_input.upload(
+        upload_event = image_input.upload(
             fn=open_meal_image_workflow,
             inputs=[image_input],
             outputs=[
                 meal_image_workflow,
                 meal_image_preview,
+                food_query,
+                detection_status,
+                detected_query_state,
             ],
             show_progress="hidden",
         )
 
-        search_button.click(
-            fn=search_candidates,
-            inputs=[
-                image_input,
-                food_query,
-            ],
-            outputs=[
-                selected_food,
-                candidate_status,
-                latest_retrieval_trace,
-            ],
+        # 匹配和试算都是系统的内部动作，不该让用户点按钮触发。
+        # 名称、候选、份量任意一项变化都重跑同一个编排函数。
+        meal_panel_inputs = [
+            image_input,
+            food_query,
+            selected_food,
+            grams_input,
+            detected_query_state,
+        ]
+        meal_panel_outputs = [
+            selected_food,
+            candidate_status,
+            meal_preview,
+            meal_preview_state,
+            latest_retrieval_trace,
+        ]
+
+        upload_event.then(
+            fn=refresh_meal_panel,
+            inputs=meal_panel_inputs,
+            outputs=meal_panel_outputs,
+            show_progress="hidden",
         )
 
-        calculate_button.click(
-            fn=calculate_meal_preview,
-            inputs=[
-                image_input,
-                food_query,
-                selected_food,
-                grams_input,
-            ],
-            outputs=[
-                meal_preview,
-                meal_preview_state,
-                calculation_status,
-                recompute_evidence,
-            ],
-        )
+        for meal_trigger in (
+            food_query.submit,
+            food_query.blur,
+            grams_input.submit,
+            grams_input.blur,
+            selected_food.change,
+        ):
+            meal_trigger(
+                fn=refresh_meal_panel,
+                inputs=meal_panel_inputs,
+                outputs=meal_panel_outputs,
+                show_progress="hidden",
+            )
+
+        # 份量快捷按钮：填进输入框后立刻重算。
+        for portion_button, portion_grams in zip(
+            portion_buttons,
+            PORTION_PRESETS,
+        ):
+            portion_button.click(
+                fn=partial(use_portion_preset, portion_grams),
+                outputs=[grams_input],
+                show_progress="hidden",
+            ).then(
+                fn=refresh_meal_panel,
+                inputs=meal_panel_inputs,
+                outputs=meal_panel_outputs,
+                show_progress="hidden",
+            )
 
         meal_save_event = meal_save_button.click(
             fn=confirm_meal_save,
             inputs=[
-                meal_preview_state
+                meal_preview_state,
+                chatbot,
             ],
             outputs=[
                 meal_save_status,
                 today_table,
                 today_summary,
+                meal_preview,
+                meal_preview_state,
+                chatbot,
+                image_input,
+                meal_image_preview,
+                meal_image_workflow,
+                food_query,
+                grams_input,
+                selected_food,
+                candidate_status,
+                recompute_evidence,
+                detection_status,
+                detected_query_state,
             ],
         )
 
@@ -4950,6 +5556,12 @@ def build_demo() -> gr.Blocks:
                 image_input,
                 meal_image_preview,
                 meal_image_workflow,
+                food_query,
+                grams_input,
+                selected_food,
+                candidate_status,
+                detection_status,
+                detected_query_state,
             ],
         )
 
@@ -4964,14 +5576,25 @@ def build_demo() -> gr.Blocks:
             show_progress="hidden",
         )
         def bind_agent_turn(
-            activity_event: Any,
+            staged_event: Any,
         ) -> None:
             """让发送、回车和快捷语句复用同一条 Agent 链路。"""
+
+            activity_event = staged_event.then(
+                fn=begin_agent_activity,
+                inputs=[
+                    pending_agent_text,
+                    selected_record_state,
+                ],
+                outputs=[agent_activity],
+                queue=False,
+                show_progress="hidden",
+            )
 
             result_event = activity_event.then(
                 fn=send_chat_message,
                 inputs=[
-                    chat_input,
+                    pending_agent_text,
                     chatbot,
                     selected_record_state,
                 ],
@@ -4992,7 +5615,11 @@ def build_demo() -> gr.Blocks:
 
             result_event.then(
                 fn=finish_agent_activity,
-                inputs=[agent_status, latest_agent_steps],
+                inputs=[
+                    agent_status,
+                    latest_agent_steps,
+                    latest_agent_state,
+                ],
                 outputs=[agent_activity],
                 queue=False,
                 show_progress="hidden",
@@ -5004,29 +5631,37 @@ def build_demo() -> gr.Blocks:
                 show_progress="hidden",
             )
 
-        send_activity_event = send_button.click(
-            fn=begin_agent_activity,
+        send_stage_event = send_button.click(
+            fn=stage_chat_message,
             inputs=[
                 chat_input,
-                selected_record_state,
+                chatbot,
             ],
-            outputs=[agent_activity],
+            outputs=[
+                chatbot,
+                chat_input,
+                pending_agent_text,
+            ],
             queue=False,
             show_progress="hidden",
         )
-        bind_agent_turn(send_activity_event)
+        bind_agent_turn(send_stage_event)
 
-        submit_activity_event = chat_input.submit(
-            fn=begin_agent_activity,
+        submit_stage_event = chat_input.submit(
+            fn=stage_chat_message,
             inputs=[
                 chat_input,
-                selected_record_state,
+                chatbot,
             ],
-            outputs=[agent_activity],
+            outputs=[
+                chatbot,
+                chat_input,
+                pending_agent_text,
+            ],
             queue=False,
             show_progress="hidden",
         )
-        bind_agent_turn(submit_activity_event)
+        bind_agent_turn(submit_stage_event)
 
         for starter_button, starter_message in starter_buttons:
             starter_event = starter_button.click(
@@ -5037,17 +5672,21 @@ def build_demo() -> gr.Blocks:
                 outputs=[chat_input],
                 show_progress="hidden",
             )
-            starter_activity_event = starter_event.then(
-                fn=begin_agent_activity,
+            starter_stage_event = starter_event.then(
+                fn=stage_chat_message,
                 inputs=[
                     chat_input,
-                    selected_record_state,
+                    chatbot,
                 ],
-                outputs=[agent_activity],
+                outputs=[
+                    chatbot,
+                    chat_input,
+                    pending_agent_text,
+                ],
                 queue=False,
                 show_progress="hidden",
             )
-            bind_agent_turn(starter_activity_event)
+            bind_agent_turn(starter_stage_event)
 
         confirm_agent_event = confirm_agent_button.click(
             fn=confirm_agent_action,
