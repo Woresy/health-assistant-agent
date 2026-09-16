@@ -73,14 +73,15 @@ def trend_charts(samples: list[tuple[str, dict[str, Any]]]) -> str:
         low = max(0, min(known) - 1) if key == "weight" and known else 0
         high = max(known) if known else 1
         high = high + 1 if key == "weight" else max(high * 1.15, 1)
-        x = lambda i: 44 + i * 512 / max(len(values) - 1, 1)
+        # 起点要给 y 轴刻度让出位置：柱子最宽 24，半宽 12 会从这里往左探出去。
+        x = lambda i: 78 + i * 488 / max(len(values) - 1, 1)
         y = lambda v: 142 - (v - low) / (high - low) * 112
         shapes = []
         for tick in ((0, 0.5, 1) if known else ()):
             value = low + (high - low) * tick
             yy = y(value)
             label = f"{value:.1f}" if key == "weight" else (f"{value / 1000:.1f}k" if value >= 1000 else f"{value:.0f}")
-            shapes.append(f'<line x1="44" y1="{yy:.1f}" x2="556" y2="{yy:.1f}" class="chart-grid"/><text x="36" y="{yy + 4:.1f}" text-anchor="end">{label}</text>')
+            shapes.append(f'<line x1="78" y1="{yy:.1f}" x2="566" y2="{yy:.1f}" class="chart-grid"/><text x="56" y="{yy + 4:.1f}" text-anchor="end">{label}</text>')
 
         previous = None
         for i, value in enumerate(values):
@@ -154,7 +155,7 @@ def trend_charts(samples: list[tuple[str, dict[str, Any]]]) -> str:
 
     order = {"exercise": 0, "water": 1, "meal": 2, "weight": 3}
     panels.sort(key=lambda panel: order[panel[0]])
-    return '<section class="health-trend-visuals"><div class="health-chart-grid">' + ''.join(panel for _, panel in panels) + '</div><p class="chart-guide">只展示已确认的记录。未记录不计为零；体重实测点之间的虚线表示间隔日期未记录。</p></section>'
+    return '<section class="health-trend-visuals"><div class="health-chart-grid">' + ''.join(panel for _, panel in panels) + '</div></section>'
 
 
 

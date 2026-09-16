@@ -521,6 +521,7 @@ select {
 .checkin-evidence { padding: 18px 0 14px 20px; border-left: 1px solid var(--line); }
 .checkin-evidence span, .checkin-action span { color: var(--signal); font-size: 9px; font-weight: 700; }
 .checkin-evidence strong { display: block; margin-top: 5px; color: var(--ink); font-size: 24px; }
+.checkin-evidence strong small { margin-left: 2px; color: var(--quiet); font-size: 12px; font-weight: 400; }
 .checkin-evidence small { color: var(--quiet); font-size: 9px; }
 .checkin-action { grid-column: 1/-1; padding: 13px 0; border-top: 1px solid var(--line); }
 .checkin-action strong { display: block; margin-top: 4px; color: var(--ink); font-size: 13px; }
@@ -1012,9 +1013,9 @@ select {
     .health-chart .chart-description { min-height: 0; }
 }
 
-.health-chart-grid { align-items: stretch; }
+/* 卡片各自决定高度：拉平高度会让展开一张卡把同一行的另一张也撑开。 */
+.health-chart-grid { align-items: start; }
 .health-chart { display: flex; flex-direction: column; }
-.health-chart > details { margin-top: auto; }
 .health-chart-water { background: #4077b2; }
 .health-chart-water .chart-missing { fill: #4077b2; }
 .health-chart-water :is(h3, p, span, strong, summary, li) { color: #fff !important; }
@@ -1047,4 +1048,41 @@ select {
     .calorie-ruler { gap: 2px; height: 58px; }
     .macro-totals { gap: 8px; }
     .macro-totals strong { font-size: 20px; }
+}
+
+/* 提醒铃铛 —— 导航里的「提醒」入口直接显示还没发生的提醒数量。 */
+.healthos-signal-host { display: none !important; }
+#main-tabs button[role="tab"] { position: relative; }
+.healthos-bell { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; line-height: 0; }
+.healthos-bell-icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; opacity: .55; transform-origin: 50% 2px; }
+.healthos-bell[data-count="0"] .healthos-bell-icon { opacity: .3; }
+.healthos-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* 数字用 attr() 渲染，Tab 的 textContent 保持是「提醒」，导航的按文字匹配回退才不会失效。 */
+.healthos-bell-badge::after { content: attr(data-count); }
+.healthos-bell-badge { min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: var(--signal); color: #fff; font-size: 10px; font-weight: 700; line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; }
+.healthos-bell[data-count="0"] .healthos-bell-badge { display: none; }
+.healthos-bell[data-variant="dot"] .healthos-bell-badge { min-width: 7px; width: 7px; height: 7px; padding: 0; font-size: 0; }
+.healthos-bell.is-ringing .healthos-bell-icon { animation: healthos-bell-swing 780ms cubic-bezier(.36,.07,.19,.97); }
+.healthos-bell.is-ringing .healthos-bell-badge { animation: healthos-badge-pop 420ms ease-out; }
+@keyframes healthos-bell-swing {
+    0%, 100% { transform: rotate(0); }
+    12% { transform: rotate(15deg); }
+    28% { transform: rotate(-12deg); }
+    44% { transform: rotate(8deg); }
+    62% { transform: rotate(-5deg); }
+    80% { transform: rotate(2deg); }
+}
+@keyframes healthos-badge-pop {
+    0% { transform: scale(.45); opacity: .25; }
+    60% { transform: scale(1.18); }
+    100% { transform: scale(1); }
+}
+@media (max-width: 720px) {
+    /* 底部标签栏是 place-items:center 的网格，铃铛只能绝对定位在角上。 */
+    .healthos-bell { position: absolute; top: 7px; left: 50%; margin: 0 0 0 9px; }
+    .healthos-bell-icon { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .healthos-bell.is-ringing .healthos-bell-icon,
+    .healthos-bell.is-ringing .healthos-bell-badge { animation: none; }
 }

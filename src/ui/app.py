@@ -354,6 +354,154 @@ APP_HEAD = """
       startNavigationEnhancements();
     }
   })();
+
+  (() => {
+    const TWEEN_MS = 560;
+    const easeOut = (progress) => 1 - Math.pow(1 - progress, 3);
+    const reduceMotion = () =>
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+
+    // 把数字从旧值补间到新值；render 决定写进文本还是属性。
+    const tween = (from, to, render) => {
+      if (from === to || reduceMotion()) {
+        render(to);
+        return;
+      }
+      const startedAt = performance.now();
+      const step = (now) => {
+        const progress = Math.min(1, (now - startedAt) / TWEEN_MS);
+        render(from + (to - from) * easeOut(progress));
+        if (progress < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    };
+
+    const BELL_MARKUP =
+      '<svg class="healthos-bell-icon" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>' +
+      '<path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>' +
+      '<span class="healthos-bell-badge" data-count="0"></span>';
+
+    const syncReminderBell = () => {
+      const signal = document.querySelector("[data-healthos-reminder-count]");
+      if (!signal) return;
+      const tab =
+        document.querySelector('#main-tabs [aria-controls="healthos-reminders"]') ||
+        Array.from(document.querySelectorAll('#main-tabs button[role="tab"]')).find(
+          (button) => button.textContent.trim().startsWith("提醒")
+        );
+      if (!tab) return;
+      let bell = tab.querySelector(".healthos-bell");
+      if (!bell) {
+        bell = document.createElement("span");
+        bell.className = "healthos-bell";
+        // 整块对读屏隐藏：Chromium 会把角标 ::after 的生成内容算进可访问名，
+        // 不隐藏的话「提醒」会变成「提醒 2」，按名字定位就全部失效。
+        // 数量改由下面的 aria-describedby 播报。
+        bell.setAttribute("aria-hidden", "true");
+        bell.dataset.count = "0";
+        bell.innerHTML = BELL_MARKUP;
+        // 动画结束就摘掉标记，下一条提醒到达时才能重新触发摆动。
+        bell.addEventListener("animationend", () => bell.classList.remove("is-ringing"));
+        tab.appendChild(bell);
+      }
+      const badge = bell.querySelector(".healthos-bell-badge");
+      const count = Math.max(0, Number(signal.dataset.healthosReminderCount) || 0);
+      const previous = Number(bell.dataset.count);
+      if (previous === count) return;
+      bell.dataset.count = String(count);
+      // 数量只能走 aria-describedby：写成 aria-label 会覆盖 Tab 的可访问名，
+      // 读屏和按名字定位的用例就再也找不到「提醒」这一项了。
+      let description = document.getElementById("healthos-reminder-description");
+      if (!description) {
+        description = document.createElement("span");
+        description.id = "healthos-reminder-description";
+        description.className = "healthos-sr-only";
+        document.body.appendChild(description);
+      }
+      description.textContent = count > 0 ? `${count} 条提醒待发送` : "";
+      if (count > 0) {
+        tab.setAttribute("aria-describedby", description.id);
+      } else {
+        tab.removeAttribute("aria-describedby");
+      }
+      tween(previous, count, (value) => {
+        badge.dataset.count = String(Math.round(value));
+      });
+      if (count > previous) {
+        bell.classList.remove("is-ringing");
+        void bell.offsetWidth;
+        bell.classList.add("is-ringing");
+      }
+    };
+
+    const NUMBER_PATTERN = /^([^\d+-]*)([+-]?\d+(?:\.\d+)?)(.*)$/;
+    const counterValues = new Map();
+
+    const collectCounters = () => {
+      const targets = [];
+      document.querySelectorAll(".health-metric").forEach((metric) => {
+        const label = metric.querySelector("label");
+        const value = metric.querySelector("strong");
+        if (label && value) targets.push([`metric:${label.textContent.trim()}`, value]);
+      });
+      document.querySelectorAll(".health-chart .metric-number").forEach((value) => {
+        const chart = value.closest(".health-chart");
+        const key = Array.from(chart?.classList || []).find((name) =>
+          name.startsWith("health-chart-")
+        );
+        if (key) targets.push([`chart:${key}`, value]);
+      });
+      return targets;
+    };
+
+    const syncCounters = () => {
+      collectCounters().forEach(([key, element]) => {
+        // 补间过程中文本一直在变，所以以写入时记下的目标值为准，而不是当前文本。
+        const text = element.dataset.healthosTarget ?? element.textContent.trim();
+        const parsed = NUMBER_PATTERN.exec(text);
+        if (!parsed) {
+          // 没有记录时显示「—」，缓存要清掉，下次有数据才会重新从 0 滚上去。
+          counterValues.delete(key);
+          return;
+        }
+        const [, prefix, digits, suffix] = parsed;
+        const target = Number(digits);
+        if (!Number.isFinite(target)) return;
+        if (counterValues.get(key) === target && element.dataset.healthosTarget === text) return;
+        const from = counterValues.has(key) ? counterValues.get(key) : 0;
+        const decimals = (digits.split(".")[1] || "").length;
+        counterValues.set(key, target);
+        element.dataset.healthosTarget = text;
+        tween(from, target, (value) => {
+          element.textContent = prefix + value.toFixed(decimals) + suffix;
+        });
+      });
+    };
+
+    let scheduled = false;
+    const sync = () => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        syncReminderBell();
+        syncCounters();
+      });
+    };
+
+    const startValueAnimations = () => {
+      // 只观察 childList：Gradio 更新 Markdown 时整块重建节点，
+      // 补间自己写入的文本因此不会再触发一轮同步。
+      new MutationObserver(sync).observe(document.body, { childList: true, subtree: true });
+      sync();
+    };
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", startValueAnimations, { once: true });
+    } else {
+      startValueAnimations();
+    }
+  })();
 </script>
 """
 
@@ -2211,8 +2359,8 @@ def refresh_trends(period_days: int = 7) -> tuple[str, str]:
     return (
         trend_charts(list(reversed(samples))),
         (
-            f"最近 {days} 天共有 {total_events} 条已确认记录，"
-            f"其中 {days_with_data} 天有数据。未记录项不会按零计算。"
+            f"最近 {days} 天你记了 {total_events} 条，"
+            f"其中 {days_with_data} 天有数据。没记的日子不会算成 0。"
         ),
     )
 
@@ -2335,6 +2483,25 @@ def _reminder_cards(reminders: list[dict[str, Any]]) -> str:
     return '<section class="reminder-list">' + "".join(cards) + "</section>"
 
 
+# 只有还没发生的提醒才值得让导航角标提示；已触发、已完成、已取消的不再计入。
+_REMINDER_PENDING_STATUSES = {"scheduled", "snoozed"}
+
+
+def _reminder_signal(reminders: list[dict[str, Any]]) -> str:
+    """把待发送提醒数量写进隐藏节点，供导航铃铛角标读取。"""
+
+    pending = sum(
+        1
+        for reminder in reminders
+        if reminder.get("delivery_channel") == "feishu"
+        and str(reminder.get("status", "")) in _REMINDER_PENDING_STATUSES
+    )
+    return (
+        '<span class="healthos-reminder-signal" '
+        f'data-healthos-reminder-count="{pending}"></span>'
+    )
+
+
 def _checkin_markdown(
     period: dict[str, Any],
     goals: list[dict[str, Any]],
@@ -2354,17 +2521,17 @@ def _checkin_markdown(
     if not period.get("event_count"):
         action = "先记录一件最容易的事，例如今天喝了多少水。"
     elif completeness < 0.5:
-        action = "记录覆盖还不完整，继续记录几天后再看趋势会更可靠。"
+        action = "再记几天，趋势会更准一些。"
     elif active_goals:
         action = f"回看“{active_goals[0]['versions'][-1].get('title', '当前目标')}”并记录今天的进度。"
     else:
         action = "可以创建一个可衡量的健康目标，让后续复盘有明确参照。"
     change = weight.get("change_kg")
-    change_text = "证据不足" if change is None else f"{change:+g} kg"
+    change_text = "记录太少，还看不出来" if change is None else f"{change:+g} kg"
     return (
         '<section class="checkin-summary">'
         '<div class="checkin-facts">'
-        f'<strong>最近 {days} 天的已记录事实</strong>'
+        f'<strong>最近 {days} 天，你记下的</strong>'
         '<ul>'
         f'<li>运动 {float(exercise.get("total_minutes", 0)):g} 分钟</li>'
         f'<li>饮水 {float(water.get("total_ml", 0)):g} ml</li>'
@@ -2372,11 +2539,12 @@ def _checkin_markdown(
         f'<li>体重变化：{escape(change_text)}</li>'
         '</ul></div>'
         '<div class="checkin-evidence">'
-        f'<span>数据完整度</span><strong>{completeness * 100:.0f}%</strong>'
-        f'<small>{int(period.get("days_with_data", 0))}/{days} 天有记录</small></div>'
-        '<div class="checkin-action"><span>建议下一步</span>'
+        f'<span>记录天数</span>'
+        f'<strong>{int(period.get("days_with_data", 0))}<small> / {days} 天</small></strong>'
+        f'<small>{"记得挺稳" if completeness >= 0.8 else "再多记几天会更准"}</small></div>'
+        '<div class="checkin-action"><span>接下来可以做的一件事</span>'
         f'<strong>{escape(action)}</strong></div>'
-        '<p>这里只陈述已保存记录；数据不足时不推断体重或饮食变化的原因。</p>'
+        '<p>以上都来自你确认过的记录；记录不够时，不会替你猜变化的原因。</p>'
         '</section>'
     )
 
@@ -2415,7 +2583,8 @@ def refresh_healthos_dashboard(period_days: int = 7) -> tuple[Any, ...]:
             str(error.get("error_code", "HEALTHOS_READ_ERROR")),
             str(error.get("message", "无法读取 HealthOS 数据")),
         )
-        return status, "", status, "", status
+        # 读取失败时保留上一轮的角标，避免把真实的待发送提醒抹成 0。
+        return status, "", status, "", status, gr.skip()
 
     profile = profile_result["data"]["profile"]
     goals = goals_result["data"]["goals"]
@@ -2429,6 +2598,7 @@ def refresh_healthos_dashboard(period_days: int = 7) -> tuple[Any, ...]:
         f"已读取 {sum(item.get('delivery_channel') == 'feishu' for item in reminders)} 条飞书提醒；"
         "修改、取消、延后、暂停和恢复都需要确认。"
         f" {REMINDER_AUTOMATION_STATUS}。",
+        _reminder_signal(reminders),
     )
 
 
@@ -4335,6 +4505,16 @@ def build_demo() -> gr.Blocks:
             elem_id="healthos-topbar-shell",
         )
 
+        # 隐藏节点，只负责把待发送提醒数量交给导航铃铛角标。必须挂在 Tabs 之外：
+        # Tab 内容是懒渲染的，放在「提醒」页里就要先打开那一页才会进 DOM，
+        # 角标也就永远不会在别的页面亮起来。
+        reminder_signal = gr.Markdown(
+            value=_reminder_signal([]),
+            sanitize_html=False,
+            container=False,
+            elem_classes="healthos-signal-host",
+        )
+
         with gr.Tabs(
             elem_id="main-tabs",
             selected="chat",
@@ -4887,8 +5067,8 @@ def build_demo() -> gr.Blocks:
                     with gr.Column(elem_classes="observation-panel"):
                         gr.Markdown(
                             """
-                            <div class="section-heading">这一周期记录了什么</div>
-                            <p class="section-copy">事实、数据完整度和下一步分开呈现。记录不足时不会推断原因。</p>
+                            <div class="section-heading">这段时间你记了什么</div>
+                            <p class="section-copy">这里只汇总你记下的内容，再给出接着可以做的一件事。</p>
                             """,
                             sanitize_html=False,
                             container=False,
@@ -5398,6 +5578,7 @@ def build_demo() -> gr.Blocks:
             checkin_summary,
             reminders_table,
             reminder_status,
+            reminder_signal,
         ]
 
         refresh_healthos_button.click(
