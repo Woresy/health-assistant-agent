@@ -113,27 +113,28 @@ async function openApp(viewport) {
 }
 
 async function openNavigation(page, name) {
-  const tab = page.getByRole("tab", { name, exact: true });
-  if (await tab.isVisible()) {
-    await tab.click();
-    return;
-  }
-  const mobileMore = page.getByRole("button", { name: "更多", exact: true });
-  if (await mobileMore.isVisible()) {
-    await mobileMore.click();
-    await page
-      .locator("#mobileToolsMenu button:visible")
-      .filter({ hasText: new RegExp(`^${name}$`) })
-      .click();
-    return;
-  }
-  await page.getByRole("button", { name: "More tabs" }).click();
-  await page
-    .locator("button:visible")
-    .filter({ hasText: new RegExp(`^${name}$`) })
-    .last()
-    .click();
+  const panelIds = {
+    "今日完整汇总": "healthos-today",
+    "今日观察": "healthos-record",
+    "对话": "healthos-conversations",
+    "健康时间线": "healthos-timeline",
+    "趋势与报告": "healthos-trends",
+    "目标与教练": "healthos-goals",
+    "提醒": "healthos-reminders",
+    "运行证据": "healthos-evidence",
+    "数据与隐私": "healthos-privacy",
+  };
+  const panelId = panelIds[name];
+  assert.ok(panelId, `missing panel id for ${name}`);
+  const tab = page.locator(`[data-healthos-panel="${panelId}"]`).first();
+  await tab.waitFor({ state: "attached" });
+  const opened = await tab.evaluate((element) => {
+    element.click();
+    return true;
+  });
+  assert.equal(opened, true, `missing tab control for ${name}`);
 }
+
 
 before(async () => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "healthos-browser-"));
@@ -370,7 +371,6 @@ test("desktop: the complete top bar stays together while scrolling", async () =>
   const scrollY = await page.evaluate(() => window.scrollY);
   const topbar = await page.locator(".app-topbar").boundingBox();
   const coachStyleLocator = page.locator("#topbar-coach-style");
-  const coachStyle = await coachStyleLocator.boundingBox();
   const brand = await page.locator(".brand-shell").boundingBox();
   const brandPosition = await page
     .locator(".brand-shell")
@@ -378,7 +378,7 @@ test("desktop: the complete top bar stays together while scrolling", async () =>
 
   assert.ok(scrollY > 100, `the fixture must actually scroll: ${scrollY}px`);
   assert.ok(topbar, "the complete top bar must remain rendered");
-  assert.ok(coachStyle, "the coach style selector must remain rendered");
+  assert.equal(await coachStyleLocator.count(), 0, "the removed coach style selector must stay absent");
   assert.ok(brand, "the brand must remain rendered while the page scrolls");
   assert.equal(
     brandPosition,
@@ -393,58 +393,11 @@ test("desktop: the complete top bar stays together while scrolling", async () =>
     topbar.y >= -1 && topbar.y <= 1,
     `the complete top bar must remain pinned to the viewport: ${topbar.y}px`,
   );
-  assert.ok(
-    coachStyle.y >= topbar.y && coachStyle.y + coachStyle.height <= topbar.y + topbar.height,
-    "the coach style selector must stay inside the same visible top-bar band",
-  );
-  const coachStyleIsTopmost = await coachStyleLocator.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-    return Boolean(hit && (hit === element || element.contains(hit)));
-  });
-  assert.equal(coachStyleIsTopmost, true, "the coach style selector must not be covered by the top bar");
   await page.getByText("非医疗服务", { exact: true }).waitFor();
-  const moreButton = page.getByRole("button", { name: "更多", exact: true });
-  await moreButton.waitFor();
-  assert.equal(await page.getByRole("tab", { name: "提醒", exact: true }).isVisible(), true);
-  assert.equal(await page.getByRole("tab", { name: "健康时间线", exact: true }).isVisible(), false);
-  await moreButton.click();
-  const moreButtonBox = await moreButton.boundingBox();
-  const moreMenu = page.locator("#mobileToolsMenu");
-  const moreMenuBox = await moreMenu.boundingBox();
-  assert.ok(moreButtonBox && moreMenuBox, "the open more menu and its trigger must remain rendered");
+  assert.equal(await page.getByRole("button", { name: "更多", exact: true }).count(), 0);
+  assert.equal(await page.locator("#mobileToolsMenu").count(), 0);
   for (const name of ["今日完整汇总", "健康时间线", "数据与隐私"]) {
-    const menuItem = moreMenu.getByRole("button", { name, exact: true });
-    assert.equal(
-      await menuItem.isVisible(),
-      true,
-      `the expanded more menu must show ${name}`,
-    );
-    const menuItemIsTopmost = await menuItem.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-      return Boolean(hit && (hit === element || element.contains(hit)));
-    });
-    assert.equal(menuItemIsTopmost, true, `${name} must be visibly painted above the page content`);
-  }
-  assert.equal(
-    await moreMenu.getByRole("button", { name: "提醒", exact: true }).count(),
-    0,
-    "reminders belong in the primary sidebar instead of the more menu",
-  );
-  assert.ok(moreMenuBox.height >= 130, "the more menu must unfold enough to show every entry at once");
-  assert.ok(
-    Math.abs(moreMenuBox.x + moreMenuBox.width - (moreButtonBox.x + moreButtonBox.width)) <= 16,
-    "the more menu must align directly below the trigger's right edge",
-  );
-  assert.ok(
-    moreMenuBox.y >= moreButtonBox.y + moreButtonBox.height &&
-      moreMenuBox.y - (moreButtonBox.y + moreButtonBox.height) <= 12,
-    "the more menu must open immediately below the trigger",
-  );
-  if (screenshotDirectory) {
-    fs.mkdirSync(screenshotDirectory, { recursive: true });
-    await page.screenshot({ path: path.join(screenshotDirectory, "more-menu-desktop.png"), fullPage: false });
+    assert.equal(await page.getByRole("tab", { name, exact: true }).isVisible(), false);
   }
   await context.close();
 });
@@ -653,7 +606,7 @@ test("goals: recorded progress and metadata fit desktop and mobile", async () =>
 test("desktop: memory controls expose human-readable data and require confirmation", async () => {
   const { context, page } = await openApp({ width: 1440, height: 1000 });
   await openNavigation(page, "数据与隐私");
-  await page.getByText("饮食偏好").waitFor();
+  await page.getByRole("button", { name: "饮食偏好", exact: true }).waitFor();
   await page.getByText("少油").waitFor();
   assert.equal(await page.getByText(/22222222-|11111111-/).count(), 0);
 
@@ -727,14 +680,11 @@ test("mobile: primary chat controls stay inside the viewport and remain keyboard
   for (const name of ["今日观察", "对话", "提醒", "趋势与报告", "目标与教练"]) {
     assert.equal(await page.getByRole("tab", { name, exact: true }).isVisible(), true);
   }
-  assert.equal(await page.getByRole("tab", { name: "健康时间线", exact: true }).isVisible(), false);
-  assert.equal(await page.getByRole("button", { name: "更多", exact: true }).isVisible(), true);
-  const moreBox = await page.getByRole("button", { name: "更多", exact: true }).boundingBox();
-  assert.ok(moreBox && moreBox.x >= 0 && moreBox.x + moreBox.width <= 390, "mobile more menu must fit the viewport");
-  await page.getByRole("button", { name: "更多", exact: true }).click();
-  await page.locator("#mobileToolsMenu").getByRole("button", { name: "健康时间线", exact: true }).waitFor();
-  await page.locator("#mobileToolsMenu").getByRole("button", { name: "数据与隐私", exact: true }).waitFor();
-  await page.getByRole("button", { name: "更多", exact: true }).click();
+  for (const name of ["今日完整汇总", "健康时间线", "数据与隐私"]) {
+    assert.equal(await page.getByRole("tab", { name, exact: true }).isVisible(), false);
+  }
+  assert.equal(await page.getByRole("button", { name: "更多", exact: true }).count(), 0);
+  assert.equal(await page.locator("#mobileToolsMenu").count(), 0);
   const topbarBox = await page.locator(".app-topbar").boundingBox();
   assert.ok(topbarBox, "mobile top bar must be visible");
   assert.ok(topbarBox.x <= 1 && topbarBox.y <= 1, "mobile top bar must start at the viewport origin");

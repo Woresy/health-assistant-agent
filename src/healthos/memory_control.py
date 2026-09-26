@@ -6,14 +6,13 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid5, NAMESPACE_URL
 
-from src.healthos.models import CoachStyle, MemoryType, UserMemory, UserProfile
+from src.healthos.models import MemoryType, UserMemory, UserProfile
 from src.storage.healthos_store import HealthOSStore, HealthOSStoreError
 
 
 MEMORY_LABELS = {
     MemoryType.DIETARY_PREFERENCE: "饮食偏好",
     MemoryType.EXCLUSION: "忌口",
-    MemoryType.COACH_STYLE: "教练风格",
     MemoryType.REMINDER_PREFERENCE: "提醒偏好",
     MemoryType.USER_NOTE: "长期偏好",
 }
@@ -33,7 +32,6 @@ def sync_profile_memories(state: Any, profile: UserProfile) -> None:
     ]
     now = datetime.now(timezone.utc)
     values: list[tuple[MemoryType, str]] = [
-        (MemoryType.COACH_STYLE, profile.coach_style.value),
         *[(MemoryType.DIETARY_PREFERENCE, item) for item in profile.dietary_preferences],
         *[(MemoryType.EXCLUSION, item) for item in profile.exclusions],
         (
@@ -112,8 +110,6 @@ def delete_user_memory(
                 update["dietary_preferences"] = [item for item in profile.dietary_preferences if item != memory.content]
             elif memory.memory_type == MemoryType.EXCLUSION:
                 update["exclusions"] = [item for item in profile.exclusions if item != memory.content]
-            elif memory.memory_type == MemoryType.COACH_STYLE:
-                update["coach_style"] = CoachStyle.GENTLE
             elif memory.memory_type == MemoryType.REMINDER_PREFERENCE:
                 update.update({"reminders_enabled": True, "quiet_hours_start": None, "quiet_hours_end": None})
             state.profiles[user_id] = profile.model_copy(update=update)

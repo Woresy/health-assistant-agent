@@ -12,7 +12,6 @@ def test_prompt_pipeline_orders_five_layers_without_hidden_reasoning() -> None:
             "profile": {
                 "timezone_name": "Asia/Shanghai",
                 "unit_system": "metric",
-                "coach_style": "gentle",
                 "dietary_preferences": [],
                 "exclusions": [],
             },

@@ -77,7 +77,6 @@ class PromptContext:
             + "第 3 层｜用户已确认档案：\n"
             + f"- 时区：{profile.get('timezone_name', '未设置')}\n"
             + f"- 单位：{profile.get('unit_system', '未设置')}\n"
-            + f"- 教练风格：{profile.get('coach_style', '未设置')}\n"
             + f"- 饮食偏好：{'、'.join(profile.get('dietary_preferences', [])) or '未设置'}\n"
             + f"- 忌口：{'、'.join(profile.get('exclusions', [])) or '未设置'}\n"
             + "第 4 层｜活动目标与待办：\n"

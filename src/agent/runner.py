@@ -60,19 +60,18 @@ SYSTEM_PROMPT = """
    get_health_events 查找候选；多条相似记录时用自然语言请用户进一步说明。修改饮食
    的食物或份量时，也必须重新执行营养候选检索与计算，再把完整结果放入 patch.payload。
 18. 面向用户的回答不得展示 UUID、内部 ID、原始 JSON、确认令牌或内部字段名。
-19. 教练风格只改变表达，不得改变事实、数值、来源、安全规则或确认要求。
-20. “我今天吃了什么”“今天喝了多少”“今天记录了什么”等问句属于查询，调用
+19. “我今天吃了什么”“今天喝了多少”“今天记录了什么”等问句属于查询，调用
    get_health_events 或 get_daily_summary，不得误建为新增草稿。
-21. 用户明确要求飞书通知时，create_reminder_draft 使用 delivery_channel=feishu；
+20. 用户明确要求飞书通知时，create_reminder_draft 使用 delivery_channel=feishu；
    Webhook 和签名密钥只由应用配置提供，不得向用户索取或在回答中展示。
-22. 主动 check-in 复用 create_reminder_draft，使用 reminder_type=check_in、
+21. 主动 check-in 复用 create_reminder_draft，使用 reminder_type=check_in、
    recurrence=daily 或 weekdays、delivery_channel=feishu；它只询问已确认记录是否需要
    补充，不得把缺少记录表述成用户没有完成，也不得自动写入健康事实。
-23. 多轮对话中应解析“刚才那条”“改成”“不是”等上下文指代。用户修订待确认草稿时，
+22. 多轮对话中应解析“刚才那条”“改成”“不是”等上下文指代。用户修订待确认草稿时，
    旧草稿立即失效，必须基于修订内容重新调用准备工具并再次等待确认。
-24. 系统会提供当前“连续对话场景”。场景策略负责组织多轮服务节奏，但不能覆盖安全、
+23. 系统会提供当前“连续对话场景”。场景策略负责组织多轮服务节奏，但不能覆盖安全、
    工具、事实来源和确认规则；省略式追问应延续最近场景，明确切换主题时跟随用户新意图。
-25. 用户要求修改已有提醒时，必须先查看提醒，再使用
+24. 用户要求修改已有提醒时，必须先查看提醒，再使用
    list_or_cancel_reminders 的 update 操作原地修改；不得通过新建提醒替代修改。
 """.strip()
 
@@ -132,7 +131,6 @@ _HEALTH_DOMAIN_TERMS = (
     "事件",
     "目标",
     "提醒",
-    "教练风格",
     "营养",
     "健康建议",
     "睡眠",
@@ -875,16 +873,9 @@ def _preview_answer(
         after = preview.get("after", {})
         if not isinstance(after, dict):
             after = {}
-        style = {
-            "gentle": "温和陪伴",
-            "rational": "理性复盘",
-            "concise": "简洁提醒",
-            "goal_focused": "目标督促",
-        }.get(str(after.get("coach_style", "")), "保持当前风格")
         return (
             "我已经整理好档案变更，目前还没有写入。\n\n"
-            f"**教练风格：{style}**\n\n"
-            "偏好只会在你确认后保存，并且可以随时再次修改。"
+            "请核对设置；确认后保存，并且可以随时再次修改。"
         )
 
     if action == "goal_change":

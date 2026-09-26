@@ -35,7 +35,6 @@ def _confirm_profile(store: HealthOSStore, tmp_path: Path) -> None:
         tool_name="prepare_profile_update",
         arguments={
             "patch": {
-                "coach_style": "rational",
                 "dietary_preferences": ["少油"],
                 "exclusions": ["花生"],
                 "reminders_enabled": False,
@@ -60,12 +59,12 @@ def test_confirmed_profile_is_visible_and_exportable(store: HealthOSStore, tmp_p
     _confirm_profile(store, tmp_path)
     listed = list_user_memories(user_id="memory-user", store=store)
     assert listed["ok"] is True
-    assert listed["data"]["count"] == 4
-    assert {item["label"] for item in listed["data"]["memories"]} == {"教练风格", "饮食偏好", "忌口", "提醒偏好"}
+    assert listed["data"]["count"] == 3
+    assert {item["label"] for item in listed["data"]["memories"]} == {"饮食偏好", "忌口", "提醒偏好"}
     exported = export_user_memories(user_id="memory-user", store=store)
     assert exported["ok"] is True
     assert exported["data"]["schema_version"] == "1.0"
-    assert len(exported["data"]["memories"]) == 4
+    assert len(exported["data"]["memories"]) == 3
 
 
 def test_delete_requires_confirmation_and_removes_prompt_preference(store: HealthOSStore, tmp_path: Path) -> None:
@@ -98,10 +97,9 @@ def test_clear_requires_confirmation_and_resets_preferences_only(store: HealthOS
     rejected = clear_user_memories(user_id="memory-user", confirmed=False, store=store)
     assert rejected["error"]["error_code"] == "CONFIRMATION_REQUIRED"
     cleared = clear_user_memories(user_id="memory-user", confirmed=True, store=store)
-    assert cleared["data"]["cleared_count"] == 4
+    assert cleared["data"]["cleared_count"] == 3
     assert list_user_memories(user_id="memory-user", store=store)["data"]["count"] == 0
     profile = store.get_profile("memory-user", "Asia/Shanghai")
-    assert profile.coach_style.value == "gentle"
     assert profile.dietary_preferences == []
     assert profile.exclusions == []
     assert profile.reminders_enabled is True

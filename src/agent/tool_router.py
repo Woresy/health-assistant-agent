@@ -416,39 +416,11 @@ class EmptyArguments(ToolInputModel):
 
 class ProfilePatchArguments(ToolInputModel):
     timezone_name: str | None = Field(default=None, min_length=1, max_length=100)
-    coach_style: Literal["gentle", "rational", "concise", "goal_focused"] | None = None
     dietary_preferences: list[str] | None = Field(default=None, max_length=20)
     exclusions: list[str] | None = Field(default=None, max_length=20)
     reminders_enabled: bool | None = None
     quiet_hours_start: str | None = None
     quiet_hours_end: str | None = None
-
-    @field_validator("coach_style", mode="before")
-    @classmethod
-    def normalize_style_alias(cls, value: Any) -> Any:
-        if not isinstance(value, str):
-            return value
-        normalized = value.strip().casefold().replace("-", "_").replace(" ", "_")
-        return {
-            "encouraging": "gentle",
-            "warm": "gentle",
-            "supportive": "gentle",
-            "温和": "gentle",
-            "温暖": "gentle",
-            "鼓励": "gentle",
-            "温和陪伴": "gentle",
-            "analytical": "rational",
-            "logical": "rational",
-            "理性": "rational",
-            "理性复盘": "rational",
-            "brief": "concise",
-            "simple": "concise",
-            "简洁": "concise",
-            "简洁提醒": "concise",
-            "accountability": "goal_focused",
-            "strict": "goal_focused",
-            "目标督促": "goal_focused",
-        }.get(normalized, normalized)
 
     @model_validator(mode="after")
     def require_at_least_one_change(self) -> "ProfilePatchArguments":
@@ -581,10 +553,10 @@ def _definition(name: str, description: str, model: type[BaseModel]) -> dict[str
 
 
 TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
-    _definition("get_user_profile", "读取最小必要用户档案、单位、时区和教练风格。", EmptyArguments),
+    _definition("get_user_profile", "读取最小必要用户档案、单位、时区和明确偏好。", EmptyArguments),
     _definition(
         "prepare_profile_update",
-        "生成档案或提醒偏好变更草稿；确认前不写入。教练风格：gentle=温和陪伴、rational=理性复盘、concise=简洁提醒、goal_focused=目标督促。",
+        "生成档案或提醒偏好变更草稿；确认前不写入。",
         ProfileUpdateArguments,
     ),
     _definition("get_health_goals", "读取健康目标当前状态和完整版本历史。", EmptyArguments),
@@ -1044,7 +1016,6 @@ class HealthToolRouter:
             "\n\n当前已确认的最小用户上下文：\n"
             f"- 时区：{profile['timezone_name']}\n"
             f"- 单位：{profile['unit_system']}\n"
-            f"- 教练风格：{profile['coach_style']}\n"
             f"- 饮食偏好：{'、'.join(profile['dietary_preferences']) or '未设置'}\n"
             f"- 忌口：{'、'.join(profile['exclusions']) or '未设置'}\n"
             "- 活动目标：\n"
@@ -1070,7 +1041,6 @@ class HealthToolRouter:
             "profile": {
                 "timezone_name": profile.timezone_name,
                 "unit_system": profile.unit_system,
-                "coach_style": profile.coach_style.value,
                 "dietary_preferences": list(profile.dietary_preferences),
                 "exclusions": list(profile.exclusions),
             },
@@ -1448,9 +1418,7 @@ class HealthToolRouter:
         except ValidationError as exc:
             if canonical_name == "prepare_profile_update":
                 validation_message = (
-                    "这项个人设置无法识别。教练风格可以选择："
-                    "温和陪伴、理性复盘、简洁提醒或目标督促；"
-                    "免打扰时间请使用 HH:MM。"
+                    "这项个人设置无法识别。免打扰时间请使用 HH:MM。"
                 )
             elif (
                 canonical_name == "prepare_health_event"

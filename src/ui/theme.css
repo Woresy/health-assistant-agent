@@ -77,16 +77,6 @@
     }
     #sidebar-conversations label:has(input:checked) { background: #304158 !important; color: #fff !important; }
     #sidebar-conversations input { position: absolute; opacity: 0; }
-    #topbar-style-selector {
-        position: fixed !important;
-        top: 17px;
-        right: 340px;
-        z-index: 20;
-        width: 110px !important;
-        min-width: 110px !important;
-    }
-    #topbar-style-selector select,
-    #topbar-style-selector input { min-height: 34px !important; font-size: 11px !important; }
     #main-tabs > .tab-wrapper, #main-tabs > .tab-nav {
         top: 142px;
         height: 282px;
@@ -123,13 +113,10 @@
 
 @media (min-width: 721px) and (max-width: 1180px) {
     #new-conversation-button, #sidebar-conversations { width:196px!important; min-width:196px!important; }
-    #topbar-style-selector { right: 30px; }
 }
 
 @media (max-width: 720px) {
     #new-conversation-button, #sidebar-conversations { display:none!important; }
-    #topbar-style-selector { position:absolute!important; top:13px; right:54px; z-index:72; width:108px!important; min-width:108px!important; }
-    #topbar-style-selector select, #topbar-style-selector input { min-height:34px!important; font-size:10px!important; }
     .app-topbar > p span, .app-topbar > p b { display:none!important; }
     #healthos-record .page-wrap { padding-top:22px; }
     #healthos-record .conversation-title h2 { font-size:27px!important; }
@@ -585,7 +572,6 @@ select {
 .margin-facts dd { margin: 0; color: var(--ink); font-size: 10px; font-weight: 750; font-variant-numeric: tabular-nums; }
 .margin-boundary { margin-top: 18px; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
 .margin-boundary strong { color: var(--ink); font-size: 10px; }
-.mobile-tools-toggle, .mobile-tools-menu { display: none; }
 
 @media (prefers-reduced-motion: no-preference) {
     .confirmation-card, .selected-record-card { animation: state-arrive .2s cubic-bezier(.16,1,.3,1) both; }
@@ -661,10 +647,6 @@ select {
     .trend-table table, .timeline-table table, .goals-table table, .memory-table table { min-width: 650px; }
     .check-in-setup { align-items: flex-start; flex-direction: column; gap: 8px; }
     .privacy-item { border-right: 0; }
-    .mobile-tools-toggle { display: inline-flex; min-width: 42px; min-height: 38px; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 9px; background: var(--field); color: var(--ink); font-size: 10px; font-weight: 700; }
-    .mobile-tools-menu { position: fixed; top: 54px; right: 10px; z-index: 80; display: none; width: 172px; padding: 7px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); box-shadow: 0 18px 44px rgba(23,37,59,.16); }
-    .mobile-tools-menu.open { display: grid; gap: 3px; }
-    .mobile-tools-menu button { justify-content: flex-start; min-height: 40px; padding: 8px 10px; border: 0; background: transparent; color: var(--ink); text-align: left; }
 }
 
 /* Final high-fidelity placement overrides. */
@@ -702,7 +684,6 @@ select {
         overflow:hidden!important;
         text-overflow:ellipsis!important;
     }
-    #topbar-coach-style { position:fixed!important; inset:17px 340px auto auto!important; z-index:60; width:110px!important; min-width:110px!important; height:36px!important; }
     #main-tabs > .tab-wrapper, #main-tabs > .tab-nav { top:142px!important; height:282px!important; padding:0 14px!important; overflow:hidden!important; }
     #main-tabs button[data-healthos-desktop="hidden"], #main-tabs button[data-healthos-nav="support"] { display:none!important; }
     #main-tabs .healthos-nav-group[data-healthos-group="tools"], #main-tabs .healthos-nav-group[data-healthos-group="system"] { display:none!important; }
@@ -715,22 +696,14 @@ select {
     .app-topbar > p b { display:none!important; }
     .app-topbar, .app-topbar > p { overflow:visible!important; }
     .app-topbar > p { position:relative; }
-    .mobile-tools-toggle { display:inline-flex!important; min-width:42px; min-height:34px; align-items:center; justify-content:center; }
-    .mobile-tools-menu { position:absolute; top:calc(100% + 4px); right:0; z-index:80; display:none; width:184px; padding:6px; overflow:visible; border:1px solid var(--line); border-radius:10px; background:var(--paper); box-shadow:0 14px 34px rgba(23,37,59,.14); }
-    .mobile-tools-menu.open { display:grid!important; grid-template-columns:minmax(0,1fr); grid-auto-flow:row; gap:3px; }
-    .mobile-tools-menu button { display:flex!important; width:100%!important; min-height:40px!important; align-items:center!important; justify-content:flex-start!important; padding:9px 11px!important; border:0!important; border-radius:7px!important; background:transparent!important; color:var(--ink)!important; font-size:11px!important; font-weight:650!important; text-align:left!important; }
-    .mobile-tools-menu button:hover, .mobile-tools-menu button:focus-visible { background:var(--field)!important; }
 }
 
 @media (min-width: 721px) and (max-width: 1180px) {
     #new-conversation-button, #sidebar-conversations { width:196px!important; min-width:196px!important; }
-    #topbar-coach-style { right:76px!important; }
-    .mobile-tools-menu { right:0; }
 }
 
 @media (max-width: 720px) {
     #new-conversation-button, #sidebar-conversations { display:none!important; }
-    #topbar-coach-style { position:fixed!important; inset:13px 54px auto auto!important; z-index:72; width:108px!important; min-width:108px!important; height:36px!important; }
     #healthos-today, #healthos-record, #healthos-conversations, #healthos-trends, #healthos-timeline, #healthos-goals, #healthos-reminders, #healthos-evidence, #healthos-privacy { width:100vw!important; min-width:0!important; max-width:100vw!important; }
     #healthos-record .workspace-heading > button { display:none!important; }
     #healthos-record .responsive-split-row { flex-direction:column!important; }
@@ -843,13 +816,6 @@ select {
         position: static !important;
         min-width: 90px !important;
         padding: 0 !important;
-    }
-    #topbar-coach-style {
-        position: absolute !important;
-        inset: 12px 54px auto auto !important;
-        z-index: 74 !important;
-        width: 108px !important;
-        min-width: 108px !important;
     }
     #main-tabs {
         position: relative !important;

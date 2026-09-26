@@ -16,13 +16,6 @@ class HealthOSModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class CoachStyle(str, Enum):
-    GENTLE = "gentle"
-    RATIONAL = "rational"
-    CONCISE = "concise"
-    GOAL_FOCUSED = "goal_focused"
-
-
 class GoalStatus(str, Enum):
     ACTIVE = "active"
     PAUSED = "paused"
@@ -43,7 +36,6 @@ class ReminderStatus(str, Enum):
 class MemoryType(str, Enum):
     DIETARY_PREFERENCE = "dietary_preference"
     EXCLUSION = "exclusion"
-    COACH_STYLE = "coach_style"
     REMINDER_PREFERENCE = "reminder_preference"
     USER_NOTE = "user_note"
 
@@ -54,7 +46,6 @@ class UserProfile(HealthOSModel):
     user_id: str = Field(min_length=1, max_length=128)
     timezone_name: str = Field(default="Asia/Shanghai", min_length=1, max_length=100)
     unit_system: Literal["metric"] = "metric"
-    coach_style: CoachStyle = CoachStyle.GENTLE
     dietary_preferences: list[str] = Field(default_factory=list, max_length=20)
     exclusions: list[str] = Field(default_factory=list, max_length=20)
     reminders_enabled: bool = True
@@ -68,35 +59,15 @@ class UserProfile(HealthOSModel):
     def strip_text(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("coach_style", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def normalize_coach_style(cls, value: Any) -> Any:
-        """兼容模型和用户常用的中英文风格表达。"""
+    def discard_legacy_coach_style(cls, value: Any) -> Any:
+        """读取旧档案时丢弃已下线的表达风格字段。"""
 
-        if not isinstance(value, str):
-            return value
-        normalized = value.strip().casefold().replace("-", "_").replace(" ", "_")
-        aliases = {
-            "encouraging": "gentle",
-            "warm": "gentle",
-            "supportive": "gentle",
-            "温和": "gentle",
-            "温暖": "gentle",
-            "鼓励": "gentle",
-            "温和陪伴": "gentle",
-            "analytical": "rational",
-            "logical": "rational",
-            "理性": "rational",
-            "理性复盘": "rational",
-            "brief": "concise",
-            "simple": "concise",
-            "简洁": "concise",
-            "简洁提醒": "concise",
-            "accountability": "goal_focused",
-            "strict": "goal_focused",
-            "目标督促": "goal_focused",
-        }
-        return aliases.get(normalized, normalized)
+        if isinstance(value, dict) and "coach_style" in value:
+            value = dict(value)
+            value.pop("coach_style", None)
+        return value
 
     @field_validator("dietary_preferences", "exclusions", mode="before")
     @classmethod
@@ -264,6 +235,25 @@ class Reminder(HealthOSModel):
 
 class HealthOSState(HealthOSModel):
     """HealthOS P1 本地持久化快照。"""
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_coach_style_memories(cls, value: Any) -> Any:
+        """旧快照中的风格记忆已不属于当前产品能力。"""
+
+        if isinstance(value, dict):
+            value = dict(value)
+            memories = value.get("memories")
+            if isinstance(memories, list):
+                value["memories"] = [
+                    item
+                    for item in memories
+                    if not (
+                        isinstance(item, dict)
+                        and item.get("memory_type") == "coach_style"
+                    )
+                ]
+        return value
 
     schema_version: Literal["1.0"] = "1.0"
     profiles: dict[str, UserProfile] = Field(default_factory=dict)

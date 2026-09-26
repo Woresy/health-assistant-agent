@@ -213,7 +213,6 @@ def get_user_profile(
                 "field_scope": [
                     "timezone_name",
                     "unit_system",
-                    "coach_style",
                     "dietary_preferences",
                     "exclusions",
                     "reminders_enabled",
@@ -239,7 +238,6 @@ def prepare_profile_update(
 
     allowed = {
         "timezone_name",
-        "coach_style",
         "dietary_preferences",
         "exclusions",
         "reminders_enabled",
@@ -265,7 +263,7 @@ def prepare_profile_update(
     except ValidationError:
         return _failure(
             "PROFILE_VALIDATION_ERROR",
-            "这项个人设置无法识别。教练风格可以选择：温和陪伴、理性复盘、简洁提醒或目标督促；免打扰时间请使用 HH:MM。",
+            "这项个人设置无法识别。免打扰时间请使用 HH:MM。",
         )
     except (ValueError, HealthOSStoreError) as exc:
         return _failure("PROFILE_UPDATE_ERROR", str(exc))

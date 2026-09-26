@@ -207,6 +207,19 @@ APP_HEAD = """
       const reminders = resolveTab("healthos-reminders", "提醒");
       const evidence = resolveTab("healthos-evidence", "运行证据");
       const privacy = resolveTab("healthos-privacy", "数据与隐私");
+      [
+        [todaySummary, "healthos-today"],
+        [today, "healthos-record"],
+        [conversations, "healthos-conversations"],
+        [trends, "healthos-trends"],
+        [goals, "healthos-goals"],
+        [timeline, "healthos-timeline"],
+        [reminders, "healthos-reminders"],
+        [evidence, "healthos-evidence"],
+        [privacy, "healthos-privacy"],
+      ].forEach(([tab, panelId]) => {
+        if (tab) tab.dataset.healthosPanel = panelId;
+      });
       [today, conversations, trends, goals, reminders].forEach((tab) => {
         if (tab) tab.dataset.healthosNav = "primary";
       });
@@ -218,8 +231,7 @@ APP_HEAD = """
         timeline.dataset.healthosDesktop = "hidden";
       }
       if (evidence) evidence.dataset.healthosNav = "utility-start";
-      // 「数据与隐私」统一从右上角「更多」进入（该菜单在所有宽度下都可见），
-      // 侧边栏只保留日常记录会反复用到的页面。
+      // 支持页保留组件与回调，但不在网站导航中提供入口。
       if (privacy) {
         privacy.dataset.healthosNav = "utility";
         privacy.dataset.healthosDesktop = "hidden";
@@ -273,34 +285,6 @@ APP_HEAD = """
         });
       });
 
-      let toggle = document.querySelector(".mobile-tools-toggle");
-      let menu = document.querySelector("#mobileToolsMenu");
-      if (!toggle || !menu) {
-        const topActions = document.querySelector(".app-topbar > p");
-        // 顶栏还没渲染好时直接返回，避免把菜单挂到 body 上留下点不到的副本。
-        if (!topActions) return;
-        toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "mobile-tools-toggle";
-        toggle.textContent = "更多";
-        toggle.setAttribute("aria-expanded", "false");
-        toggle.setAttribute("aria-controls", "mobileToolsMenu");
-        menu = document.createElement("div");
-        menu.id = "mobileToolsMenu";
-        menu.className = "mobile-tools-menu";
-        topActions.appendChild(toggle);
-        topActions.appendChild(menu);
-      }
-      if (!document.documentElement.dataset.healthosMenuBound) {
-        document.documentElement.dataset.healthosMenuBound = "true";
-        document.addEventListener("click", (event) => {
-          const activeToggle = event.target.closest?.(".mobile-tools-toggle");
-          if (!activeToggle) return;
-          const activeMenu = document.querySelector("#mobileToolsMenu");
-          const open = activeMenu?.classList.toggle("open") || false;
-          activeToggle.setAttribute("aria-expanded", String(open));
-        });
-      }
       if (!document.documentElement.dataset.healthosConversationNavBound) {
         document.documentElement.dataset.healthosConversationNavBound = "true";
         document.addEventListener("click", (event) => {
@@ -311,37 +295,6 @@ APP_HEAD = """
           window.setTimeout(() => today.click(), 0);
         });
       }
-      const menuEntries = [
-        ["今日完整汇总", todaySummary],
-        ["健康时间线", timeline],
-        ["数据与隐私", privacy],
-      ];
-      if (window.__healthosShowDeveloperUi) {
-        menuEntries.splice(2, 0, ["运行证据", evidence]);
-      }
-      menuEntries.forEach(([key, tab]) => {
-        if (menu.querySelector(`[data-healthos-tool="${key}"]`)) return;
-        const item = document.createElement("button");
-        item.type = "button";
-        item.dataset.healthosTool = key;
-        item.textContent = key;
-        item.addEventListener("click", () => {
-          if (tab) {
-            tab.click();
-          } else {
-            const moreTabs = tabScope.querySelector('button[aria-label="More tabs"]');
-            moreTabs?.click();
-            window.setTimeout(() => {
-              Array.from(tabScope.querySelectorAll("button"))
-                .find((candidate) => candidate.textContent.trim() === key && candidate.offsetParent)
-                ?.click();
-            }, 0);
-          }
-          menu.classList.remove("open");
-          toggle.setAttribute("aria-expanded", "false");
-        });
-        menu.appendChild(item);
-      });
     };
     const observer = new MutationObserver(classifyHealthOSNavigation);
     const startNavigationEnhancements = () => {
@@ -1150,18 +1103,12 @@ def _pending_confirmation_content(
     elif action == "profile_update":
         preview = data.get("preview", {})
         after = preview.get("after", {}) if isinstance(preview, dict) else {}
-        style = {
-            "gentle": "温和陪伴",
-            "rational": "理性复盘",
-            "concise": "简洁提醒",
-            "goal_focused": "目标督促",
-        }.get(str(after.get("coach_style", "")), "保持当前风格")
         label = "档案"
         title = "确认更新个人档案"
         summary_html = (
             '<div class="confirmation-summary">'
-            f"<strong>教练风格：{escape(style)}</strong>"
-            f"<span>时区：{escape(str(after.get('timezone_name', APP_TIMEZONE)))}</span>"
+            f"<strong>时区：{escape(str(after.get('timezone_name', APP_TIMEZONE)))}</strong>"
+            "<span>请核对已选择的档案和提醒设置。</span>"
             "</div>"
         )
         consequence = "确认后更新已明确选择的偏好；健康事实和安全规则不会改变。"
@@ -1565,7 +1512,7 @@ def begin_agent_activity(
             "正在理解修改内容",
             "接下来会生成待确认草稿",
         )
-    elif any(term in normalized_text for term in ("目标", "档案", "教练风格", "偏好")):
+    elif any(term in normalized_text for term in ("目标", "档案", "偏好")):
         steps = (
             "已识别个人设置或目标请求",
             "正在读取当前版本与历史",
@@ -2365,13 +2312,6 @@ def refresh_trends(period_days: int = 7) -> tuple[str, str]:
     )
 
 
-_COACH_STYLE_LABELS = {
-    "gentle": "温和陪伴",
-    "rational": "理性复盘",
-    "concise": "简洁提醒",
-    "goal_focused": "目标督促",
-}
-
 _GOAL_STATUS_LABELS = {
     "active": "进行中",
     "paused": "已暂停",
@@ -2400,10 +2340,6 @@ _REMINDER_STATUS_LABELS = {
 def _profile_markdown(profile: dict[str, Any]) -> str:
     """将最小档案转换为用户可读设置摘要。"""
 
-    style = _COACH_STYLE_LABELS.get(
-        str(profile.get("coach_style", "gentle")),
-        "温和陪伴",
-    )
     preferences = profile.get("dietary_preferences") or []
     exclusions = profile.get("exclusions") or []
     quiet_start = profile.get("quiet_hours_start")
@@ -2421,8 +2357,6 @@ def _profile_markdown(profile: dict[str, Any]) -> str:
         reminder_text = "开启（发送通道未连接）"
     return (
         '<section class="profile-summary">'
-        '<div><span>教练风格</span>'
-        f'<strong>{escape(style)}</strong></div>'
         '<div><span>时区</span>'
         f'<strong>{escape(str(profile.get("timezone_name", APP_TIMEZONE)))}</strong></div>'
         '<div><span>提醒</span>'
@@ -2655,7 +2589,7 @@ def prepare_memory_clear() -> tuple[dict[str, str], Any, Any, Any]:
     preview = (
         '<section class="memory-confirmation memory-confirmation-danger" role="alert">'
         '<strong>确认清除全部长期记忆？</strong>'
-        '<p>教练风格、饮食偏好、忌口和提醒偏好会恢复默认。</p>'
+        '<p>饮食偏好、忌口和提醒偏好会恢复默认。</p>'
         '<small>健康事实、目标、提醒任务和对话历史不会被删除。</small>'
         '</section>'
     )
@@ -2722,7 +2656,7 @@ def open_healthos_action(prompt: str) -> tuple[Any, str, dict[str, Any], Any]:
 
 
 def open_profile_settings() -> tuple[Any, str, dict[str, Any], Any]:
-    return open_healthos_action("请先显示我的个人设置，我想调整教练风格或提醒偏好。")
+    return open_healthos_action("请先显示我的个人设置，我想调整偏好或提醒设置。")
 
 
 def open_goal_creation() -> tuple[Any, str, dict[str, Any], Any]:
@@ -2964,18 +2898,6 @@ def open_today_workspace() -> Any:
     """从记录对话查看已确认的今日结果。"""
 
     return gr.Tabs(selected="today")
-
-
-def open_coach_style_change(style: str) -> tuple[str, Any]:
-    """把顶栏表达风格选择转成现有确认式对话流程。"""
-
-    label = {
-        "gentle": "温和陪伴",
-        "rational": "理性观察",
-        "concise": "简洁行动",
-        "goal_focused": "目标督促",
-    }.get(str(style), "理性观察")
-    return f"请把小满的表达风格调整为{label}", gr.Tabs(selected="chat")
 
 
 def conversation_starter_message(
@@ -4435,7 +4357,6 @@ def build_demo() -> gr.Blocks:
         if APP_TIMEZONE
         else ""
     )
-    initial_profile = healthos_store.get_profile(LOCAL_USER_ID, APP_TIMEZONE)
 
     with gr.Blocks(
         title="小满 · 个人健康助理",
@@ -4480,24 +4401,11 @@ def build_demo() -> gr.Blocks:
             show_label=True,
             elem_id="sidebar-conversations",
         )
-        coach_style_selector = gr.Dropdown(
-            choices=[
-                ("温和陪伴", "gentle"),
-                ("理性观察", "rational"),
-                ("简洁行动", "concise"),
-                ("目标督促", "goal_focused"),
-            ],
-            value=initial_profile.coach_style.value,
-            show_label=False,
-            container=False,
-            elem_id="topbar-coach-style",
-        )
-
         gr.Markdown(
             f"""
             <header class="app-topbar">
               <div><h1>今日观察</h1><span>{escape(initial_date)} · 记录、确认，再回看真实变化</span></div>
-              <p><b>理性观察</b><span>非医疗服务</span></p>
+              <p><span>非医疗服务</span></p>
             </header>
             """,
             sanitize_html=False,
@@ -5473,13 +5381,6 @@ def build_demo() -> gr.Blocks:
             create_event.then(
                 fn=open_record_workspace,
                 outputs=[main_tabs],
-                show_progress="hidden",
-            )
-
-        coach_style_selector.input(
-            fn=open_coach_style_change,
-            inputs=[coach_style_selector],
-            outputs=[chat_input, main_tabs],
                 show_progress="hidden",
             )
 

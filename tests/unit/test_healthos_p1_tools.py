@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
 from src.agent.models import PendingConfirmation
 from src.agent.tool_router import HealthToolRouter
+from src.healthos.models import HealthOSState
 from src.storage.healthos_store import HealthOSStore
 from src.storage.jsonl_store import HealthEventStore
 
@@ -79,15 +80,16 @@ def test_exactly_sixteen_public_tool_contracts(router: HealthToolRouter) -> None
 
 def test_profile_update_requires_confirmation_and_is_idempotent(router: HealthToolRouter) -> None:
     original = dispatch(router, "get_user_profile", {})
-    assert original.result["data"]["profile"]["coach_style"] == "gentle"
+    assert original.result["data"]["profile"]["quiet_hours_start"] is None
+    assert "coach_style" not in original.result["data"]["profile"]
 
     draft = dispatch(
         router,
         "prepare_profile_update",
-        {"patch": {"coach_style": "rational", "quiet_hours_start": "22:00", "quiet_hours_end": "07:00"}},
+        {"patch": {"quiet_hours_start": "22:00", "quiet_hours_end": "07:00"}},
     )
     assert draft.result["data"]["action"] == "profile_update"
-    assert dispatch(router, "get_user_profile", {}).result["data"]["profile"]["coach_style"] == "gentle"
+    assert dispatch(router, "get_user_profile", {}).result["data"]["profile"]["quiet_hours_start"] is None
 
     pending = pending_from(draft, "prepare_profile_update")
     first = router.confirm(pending)
@@ -95,7 +97,9 @@ def test_profile_update_requires_confirmation_and_is_idempotent(router: HealthTo
     assert first["ok"] is True
     assert first["data"]["idempotent_replay"] is False
     assert second["data"]["idempotent_replay"] is True
-    assert dispatch(router, "get_user_profile", {}).result["data"]["profile"]["coach_style"] == "rational"
+    profile = dispatch(router, "get_user_profile", {}).result["data"]["profile"]
+    assert profile["quiet_hours_start"] == "22:00"
+    assert "coach_style" not in profile
 
 
 def test_profile_rejects_unapproved_sensitive_fields(router: HealthToolRouter) -> None:
@@ -109,14 +113,14 @@ def test_profile_rejects_unapproved_sensitive_fields(router: HealthToolRouter) -
     assert result.result["error"]["error_code"] == "VALIDATION_ERROR"
 
 
-def test_profile_normalizes_encouraging_to_gentle(router: HealthToolRouter) -> None:
+def test_profile_rejects_removed_coach_style(router: HealthToolRouter) -> None:
     draft = dispatch(
         router,
         "prepare_profile_update",
-        {"patch": {"coach_style": "encouraging"}},
+        {"patch": {"coach_style": "gentle"}},
     )
-    assert draft.status == "executed"
-    assert draft.result["data"]["preview"]["after"]["coach_style"] == "gentle"
+    assert draft.status == "invalid"
+    assert draft.result["error"]["error_code"] == "VALIDATION_ERROR"
 
 
 def test_goal_updates_append_versions_instead_of_overwriting(router: HealthToolRouter) -> None:
@@ -502,3 +506,34 @@ def test_write_token_cannot_be_reused_for_modified_payload(router: HealthToolRou
     result = router.confirm(pending)
     assert result["ok"] is False
     assert result["error"]["error_code"] == "CONFIRMATION_INVALID"
+
+
+def test_legacy_coach_style_is_discarded_from_saved_state() -> None:
+    now = datetime.now(timezone.utc)
+    state = HealthOSState.model_validate(
+        {
+            "profiles": {
+                "legacy-user": {
+                    "user_id": "legacy-user",
+                    "timezone_name": "Asia/Shanghai",
+                    "coach_style": "rational",
+                    "updated_at": now,
+                }
+            },
+            "memories": [
+                {
+                    "memory_id": "11111111-1111-1111-1111-111111111111",
+                    "user_id": "legacy-user",
+                    "memory_type": "coach_style",
+                    "content": "rational",
+                    "source": "profile_confirmation",
+                    "confirmed_at": now,
+                    "updated_at": now,
+                }
+            ],
+        }
+    )
+
+    profile = state.profiles["legacy-user"]
+    assert "coach_style" not in profile.model_dump()
+    assert state.memories == []

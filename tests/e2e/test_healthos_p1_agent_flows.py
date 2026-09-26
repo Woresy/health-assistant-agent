@@ -125,14 +125,18 @@ def test_agent_profile_draft_confirm_and_read(tmp_path: Path) -> None:
     session, _, router = build_session(
         tmp_path,
         "prepare_profile_update",
-        {"patch": {"coach_style": "concise"}},
+        {"patch": {"dietary_preferences": ["清淡"]}},
     )
-    prepared = session.send("把教练风格改成简洁提醒")
+    prepared = session.send("把我的饮食偏好改成清淡")
     assert prepared.state.value == "awaiting_confirmation"
-    assert dispatch_read(router, "get_user_profile", {}).result["data"]["profile"]["coach_style"] == "gentle"
+    profile = dispatch_read(router, "get_user_profile", {}).result["data"]["profile"]
+    assert profile["dietary_preferences"] == []
+    assert "coach_style" not in profile
     confirmed = session.confirm()
     assert confirmed.answer == "个人档案已确认更新。"
-    assert dispatch_read(router, "get_user_profile", {}).result["data"]["profile"]["coach_style"] == "concise"
+    profile = dispatch_read(router, "get_user_profile", {}).result["data"]["profile"]
+    assert profile["dietary_preferences"] == ["清淡"]
+    assert "coach_style" not in profile
 
 
 def test_agent_goal_draft_confirm_preserves_versioned_goal(tmp_path: Path) -> None:

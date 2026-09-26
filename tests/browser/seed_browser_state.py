@@ -16,7 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.agent.models import AgentMessage, SessionState
 from src.health.models import HealthEvent
 from src.healthos.memory_control import sync_profile_memories
-from src.healthos.models import CoachStyle, UserProfile, HealthGoal, GoalVersion
+from src.healthos.models import UserProfile, HealthGoal, GoalVersion
 from src.storage.sqlite_store import (
     SQLiteDatabase,
     SQLiteConversationStore,
@@ -68,7 +68,6 @@ def seed(database_path: Path) -> None:
         profile = UserProfile(
             user_id=USER_ID,
             timezone_name="Asia/Shanghai",
-            coach_style=CoachStyle.RATIONAL,
             dietary_preferences=["少油"],
             exclusions=["花生"],
             updated_at=now,
