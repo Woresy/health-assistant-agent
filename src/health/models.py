@@ -105,7 +105,7 @@ class MealPortion(StrictModel):
 
 
 class MealNutrition(StrictModel):
-    """确定性计算产生的营养估算。"""
+    """按份量换算的营养估算；source_ref 区分数据表、网页与模型粗估。"""
 
     calories_kcal: float = Field(
         ge=0,

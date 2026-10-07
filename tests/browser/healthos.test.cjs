@@ -514,7 +514,7 @@ test("desktop: meal images open a real review flow inside the conversation", asy
     page.getByRole("button", { name: "添加图片", exact: true }).click(),
   ]);
   await fileChooser.setFiles(path.join(projectRoot, "tests/fixtures/meal.png"));
-  await page.getByText("确认餐食信息", { exact: true }).waitFor();
+  await page.getByText("确认这一餐", { exact: true }).waitFor();
   const workflowText = await page.locator(".chat-meal-workflow").innerText();
   assert.doesNotMatch(
     workflowText,
@@ -540,7 +540,7 @@ test("desktop: meal images open a real review flow inside the conversation", asy
   await page.getByRole("button", { name: "保存这一餐", exact: true }).click();
   await page.getByText("饮食记录已保存。今日概览已同步更新。", { exact: true }).waitFor();
   assert.equal(
-    await page.getByText("确认餐食信息", { exact: true }).isVisible(),
+    await page.getByText("确认这一餐", { exact: true }).isVisible(),
     false,
     "the completed meal form must leave the conversation flow after save",
   );

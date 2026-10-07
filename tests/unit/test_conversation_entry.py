@@ -18,9 +18,11 @@ def test_conversation_is_default_entry_with_working_starters() -> None:
 from src.ui.app import begin_agent_activity, build_demo, finish_agent_activity
 
 active_process = begin_agent_activity("我今天喝了多少水", {})
-assert active_process.value.count("<li") == 3
+assert active_process.value.count("<li") == 1
 assert "小满正在处理" in active_process.value
-assert "完成后会告诉你结果" in active_process.value
+assert "实际执行步骤" in active_process.value
+assert "已收到请求，正在准备处理" in active_process.value
+assert "正在读取已确认记录" not in active_process.value
 
 finished_process = finish_agent_activity(
     "本轮操作已完成。",

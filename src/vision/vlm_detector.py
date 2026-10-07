@@ -1,14 +1,14 @@
 """通过 OpenAI-compatible 多模态 Provider 识别餐食。
 
-和 YOLO 适配器实现同一个 `FoodDetector` 协议：只产出"建议检索词"，
-交给现有 Hybrid RAG 检索、由用户确认，营养值仍然按选中的食物数据行计算。
+和 YOLO 适配器实现同一个 `FoodDetector` 协议：产出"建议检索词"和估算份量，
+优先用本地食物数据；缺失时可使用显式标注的模型营养估算，用户确认后保存。
 
 与 YOLO 的关键差别，必须让用户知道：**图片会离开本机，发送给第三方 Provider。**
 因此这条链路默认关闭，开启后界面必须显式告知。
 
 刻意不把本地食物库的名称列表塞进 Prompt：那会退化成和 COCO 一样的闭集问题，
-逼模型从已知名字里挑一个最像的。这里让它自由说出中文菜名，再由检索的
-拒答门控决定认不认——认不出来就诚实回退手填。
+逼模型从已知名字里挑一个最像的。这里按餐盒或成品菜给出保守名称和显式粗估，
+由用户核对后确认；不可辨认的图片不会伪造结果。
 """
 
 from __future__ import annotations
@@ -23,27 +23,37 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from src.nutrition.model_estimate import ModelNutritionEstimate
 from src.vision.detector import DetectionError
 from src.vision.models import DetectionResult, FoodDetection
 
 
-MAX_SUGGESTIONS = 5
+MAX_SUGGESTIONS = 20
 
-# 整图描述，不是逐框检测，所以一次请求就够，不需要多轮。
 SYSTEM_PROMPT = (
-    "你是餐食图片识别助手。只做一件事：说出图里的食物叫什么。\n"
-    "规则：\n"
-    "1. 用中文说出最常见的菜名或食材名，例如「番茄炒蛋」「米饭」「苹果」。\n"
-    "2. 名称要简短，不超过 12 个字，不要加份量、不要加形容词、不要加标点。\n"
-    "3. 按你的把握从高到低排列，最多 5 个。\n"
-    "4. confidence 用 0 到 1 的小数，表示你对这个名字的把握。\n"
-    "5. 如果图里没有食物，或者你认不出来，返回空列表。"
-    "不要猜一个最像的答案充数。\n"
-    "6. 只输出 JSON，不要输出任何解释或代码块标记。\n"
-    "输出格式：{\"foods\": [{\"name\": \"番茄炒蛋\", \"confidence\": 0.9}]}"
+    "你是日常餐食记录助手。用户只想确认整餐估算，不会填写克重。\n"
+    "1. 以独立餐盒或成品菜为单位识别：一只餐盒里的主食、配菜、面包、酱料合为一项；"
+    "一盘成品菜为一项，独立汤碗或饮料可单列。不要把同一餐盒拆成原料清单。\n"
+    "2. name 用简洁、保守的中文名称，如「三明治餐盒」「蔬菜意面」「汤品」。"
+    "看不清肉类、口味或馅料时不要硬猜，如无法辨明鱼种就说「煎鱼」。"
+    "components 只列有把握的主要组成，不能在 foods 中再次计算这些配料。\n"
+    "3. 每个独立餐盒/菜品用唯一 group_id，例如 box_left、box_middle、soup_right；"
+    "不同餐盒即使同名也保持独立。portion_description 写位置与自然份量，例如「左侧约一盒」。\n"
+    "4. estimated_grams 为这一整盒/整道菜可食部分的总克重，包含配菜和酱料，"
+    "不含容器。根据可见大小与常见份量估算，不要全部填100克。范围大于0且不超过10000。\n"
+    "5. 每项同时给出 estimated_nutrition：根据可见主要组成、常见烹调油和酱料，"
+    "估算混合熟食每100克的热量、蛋白质、脂肪、碳水。数值只是模型粗估，"
+    "不是营养数据库结果；不要编造来源网址或声称已称量。不要把整份热量填到每100克。\n"
+    "6. confidence 表示对餐盒或成品菜类别的把握，0到1。认不出来或没有食物返回空列表，"
+    "不要猜一个最像的答案充数。确实无法估量时相关字段返回null。\n"
+    "7. 覆盖图中全部餐盒/成品菜，不重复、不遗漏；最多20项。只输出JSON。\n"
+    '格式：{"foods":[{"group_id":"box_left","name":"三明治餐盒",'
+    '"components":["三明治","蔬菜配菜"],"confidence":0.85,"estimated_grams":350,'
+    '"portion_description":"左侧约一盒","estimated_nutrition":{'
+    '"calories_per_100g":200,"protein_per_100g":12,"fat_per_100g":8,"carbs_per_100g":20}}]}'
 )
 
-USER_PROMPT = "这张图里的食物是什么？按上面的格式只回 JSON。"
+USER_PROMPT = "按餐盒或成品菜汇总这张照片，估算整盒份量和混合熟食营养，不逐个拆出配料。只回JSON。"
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png"}
 
@@ -58,6 +68,11 @@ class VlmFood(BaseModel):
 
     name: str = Field(min_length=1, max_length=64)
     confidence: float = Field(default=0.0, ge=0, le=1)
+    estimated_grams: float | None = Field(default=None, gt=0, le=10000, allow_inf_nan=False)
+    portion_description: str = Field(default="", max_length=120)
+    group_id: str | None = Field(default=None, max_length=40)
+    components: list[str] = Field(default_factory=list, max_length=12)
+    estimated_nutrition: ModelNutritionEstimate | None = None
 
 
 class VlmResponse(BaseModel):
@@ -65,7 +80,7 @@ class VlmResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    foods: list[VlmFood] = Field(default_factory=list)
+    foods: list[VlmFood] = Field(max_length=MAX_SUGGESTIONS)
 
 
 def _strip_code_fence(text: str) -> str:
@@ -131,7 +146,7 @@ class VlmFoodDetector:
         model: str,
         *,
         min_confidence: float = 0.35,
-        max_tokens: int = 256,
+        max_tokens: int = 4096,
     ) -> None:
         self._client = client
         self._model = model
@@ -226,12 +241,35 @@ class VlmFoodDetector:
 
         for food in foods:
             name = food.name.strip()
-            if not name or name in seen:
+            if not name or food.confidence < self.min_confidence:
                 continue
-            if food.confidence < self.min_confidence:
+            key = f"group:{food.group_id}" if food.group_id else f"name:{name}"
+            if key in seen:
+                # A repeated container is the same visual object, not another portion.
+                if food.group_id:
+                    continue
+                previous = next(item for item in detections if item.label == name and not item.group_id)
+                if previous.estimated_grams is not None and food.estimated_grams is not None:
+                    old_grams = previous.estimated_grams
+                    total = old_grams + food.estimated_grams
+                    if total > 10000:
+                        raise DetectionError("DETECTION_PROVIDER_PROTOCOL", "合并后的份量超出上限")
+                    if previous.estimated_nutrition is not None and food.estimated_nutrition is not None:
+                        previous.estimated_nutrition = ModelNutritionEstimate(**{
+                            field: (getattr(previous.estimated_nutrition, field) * old_grams
+                                    + getattr(food.estimated_nutrition, field) * food.estimated_grams) / total
+                            for field in ModelNutritionEstimate.model_fields
+                        })
+                    else:
+                        previous.estimated_nutrition = None
+                    previous.estimated_grams = total
+                    previous.portion_description = "同类食物合计"
+                else:
+                    previous.estimated_grams = None
+                    previous.estimated_nutrition = None
                 continue
 
-            seen.add(name)
+            seen.add(key)
             detections.append(
                 FoodDetection(
                     class_id=None,
@@ -240,11 +278,13 @@ class VlmFoodDetector:
                     suggested_query=name,
                     confidence=food.confidence,
                     bbox=None,
+                    estimated_grams=food.estimated_grams,
+                    portion_description=food.portion_description,
+                    group_id=food.group_id,
+                    components=food.components,
+                    estimated_nutrition=food.estimated_nutrition,
                 )
             )
-
-            if len(detections) >= MAX_SUGGESTIONS:
-                break
 
         detections.sort(
             key=lambda item: item.confidence,
@@ -261,6 +301,7 @@ class VlmFoodDetector:
             min_confidence=self.min_confidence,
             detections=detections,
             elapsed_ms=elapsed_ms,
+            incomplete=any(not food.name.strip() or food.confidence < self.min_confidence for food in foods),
         )
 
 

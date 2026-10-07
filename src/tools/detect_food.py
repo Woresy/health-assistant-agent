@@ -1,6 +1,6 @@
 """餐食图片检测工具协议封装。
 
-检测只产生"建议检索词"。候选确认、RAG 检索、营养计算和保存一步都不跳过，
+检测产生建议检索词和可选的估算份量。候选确认、RAG 检索、营养计算和保存一步都不跳过，
 识别失败时全部回退到手工填写。
 """
 
@@ -24,9 +24,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TRACE_PATH = (
     PROJECT_ROOT / "data" / "detection_traces.jsonl"
 )
-
-MAX_SUGGESTIONS = 5
-
 
 def _failure(error_code: str, message: str) -> dict[str, Any]:
     """构造稳定的失败协议。"""
@@ -109,7 +106,7 @@ def detect_food(
         result.detections,
         key=lambda detection: detection.confidence,
         reverse=True,
-    )[:MAX_SUGGESTIONS]
+    )
 
     top = detections[0] if detections else None
 
@@ -117,6 +114,7 @@ def detect_food(
         "ok": True,
         "data": {
             "status": result.status,
+            "incomplete": result.incomplete,
             "mode": result.mode,
             "model_version": result.model_version,
             "candidate_source": "model",

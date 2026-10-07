@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from src.agent.progress import report_progress
+
 import hashlib
 from typing import Any, Literal
 
@@ -332,6 +334,7 @@ class LangGraphAgentRunner:
         pending_tool_name = None
         if isinstance(pending_state, dict):
             pending_tool_name = str(pending_state.get("tool_name", "")) or None
+        report_progress("正在分析请求并整理下一步")
         reply = self._model.complete(
             messages,
             self._router.tool_definitions_for(

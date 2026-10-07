@@ -15,6 +15,9 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from src.ui.health_charts import goal_cards, trend_charts
+from src.agent.progress import report_progress, run_with_progress
+from src.nutrition.web_lookup import WebNutritionLookup, WebNutritionError
+from src.nutrition.model_estimate import ModelNutritionEstimate
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -570,8 +573,10 @@ DETECTION_CONFIG = FoodDetectionConfig.from_environment()
 # 权重或 onnxruntime 缺失时是 None；识别只是预填增强项，缺它不挡任何事。
 food_detector = build_food_detector(DETECTION_CONFIG)
 
-if DETECTION_CONFIG.available:
+if DETECTION_CONFIG.uses_remote_provider:
     # 图片外发的说明放在「数据与隐私」页和 README，不占对话区的版面。
+    MEAL_WORKFLOW_STEPS = "帮你看看吃了什么、大概多少，以及这一餐的热量。"
+elif DETECTION_CONFIG.available:
     MEAL_WORKFLOW_STEPS = "名称已经按图片填好，核对一下，再选个份量就行。"
 else:
     MEAL_WORKFLOW_STEPS = (
@@ -1487,123 +1492,22 @@ def switch_agent_conversation(
     )
 
 
-def begin_agent_activity(
-    user_text: str,
-    selected_record: (
-        dict[str, Any]
-        | None
-    ),
-) -> Any:
-    """用可验证的执行步骤替代默认计时提示。"""
-
-    normalized_text = (
-        user_text.strip()
-        if isinstance(user_text, str)
-        else ""
-    )
-    has_selected_record = bool(
-        isinstance(selected_record, dict)
-        and selected_record.get("event_id")
-    )
-
-    if has_selected_record:
-        steps = (
-            "已关联你选择的健康记录",
-            "正在理解修改内容",
-            "接下来会生成待确认草稿",
-        )
-    elif any(term in normalized_text for term in ("目标", "档案", "偏好")):
-        steps = (
-            "已识别个人设置或目标请求",
-            "正在读取当前版本与历史",
-            "接下来生成可确认的变更草稿",
-        )
-    elif "提醒" in normalized_text:
-        steps = (
-            "已识别提醒行动",
-            "正在核对时间、时区和当前状态",
-            "接下来生成可确认的提醒草稿",
-        )
-    elif any(term in normalized_text for term in ("建议", "健康知识", "怎么吃", "怎么运动")):
-        steps = (
-            "已识别一般健康知识问题",
-            "正在检查安全边界与可信来源",
-            "接下来整理带引用的回答",
-        )
-    elif any(
-        term in normalized_text
-        for term in (
-            "查询",
-            "查看",
-            "多少",
-            "汇总",
-            "今天有哪些",
-        )
-    ):
-        steps = (
-            "已识别查询范围",
-            "正在读取已确认记录",
-            "接下来整理成自然语言结果",
-        )
-    elif any(
-        term in normalized_text
-        for term in (
-            "记录",
-            "喝了",
-            "吃了",
-            "跑步",
-            "体重",
-        )
-    ):
-        steps = (
-            "已识别健康记录请求",
-            "正在检查必要信息",
-            "接下来生成待确认草稿",
-        )
-    else:
-        steps = (
-            "已收到你的问题",
-            "正在选择合适的健康工具",
-            "接下来整理清晰的回答",
-        )
-
-    items = "".join(
-        (
-            '<li class="done"><span></span><div><strong>'
-            if index == 0
-            else (
-                '<li class="active"><span></span><div><strong>'
-                if index == 1
-                else "<li><span></span><div><strong>"
-            )
-        )
-        + escape(step)
-        + (
-            "</strong><small>已完成</small></div></li>"
-            if index == 0
-            else (
-                "</strong><small>处理中</small></div></li>"
-                if index == 1
-                else "</strong><small>等待</small></div></li>"
-            )
-        )
-        for index, step in enumerate(steps)
-    )
-
+def _progress_card(steps: list[str], elapsed: int = 0) -> Any:
+    items = "".join(f"<li><span></span><div><strong>{escape(step)}</strong></div></li>" for step in steps)
     return gr.Markdown(
         value=(
-            '<section class="agent-process active" '
-            'role="status" aria-live="polite">'
+            '<section class="agent-process active" role="status" aria-live="polite">'
             '<header><span class="process-pulse" aria-hidden="true"></span>'
-            "<div><strong>小满正在处理</strong>"
-            "<small>完成后会告诉你结果，或请你确认下一步</small></div></header>"
-            f"<ol>{items}</ol>"
-            "</section>"
-        ),
-        visible=True,
-        sanitize_html=False,
-        container=False,
+            f'<div><strong>小满正在处理 · 已等待 {elapsed} 秒</strong>'
+            '<small>以下为实际执行步骤，完成后可查看处理摘要</small></div></header>'
+            f'<ol>{items}</ol></section>'
+        ), visible=True, sanitize_html=False, container=False,
     )
+
+
+def begin_agent_activity(user_text: str, selected_record: dict[str, Any] | None) -> Any:
+    """Do not claim tools ran before receiving actual execution events."""
+    return _progress_card(["已收到请求，正在准备处理"])
 
 
 def stage_chat_message(
@@ -3353,6 +3257,148 @@ def open_meal_image_workflow(
     )
 
 
+def prepare_web_meal_draft(query: str, grams: float) -> dict[str, Any]:
+    food = WebNutritionLookup().lookup(query)
+    return _prepare_image_food_draft(food, query, grams,
+        "按图片估算可食部分克重；联网每100g数据等比例换算，实际配方可能不同")
+
+
+def prepare_model_meal_draft(item: dict[str, Any], model_version: str) -> dict[str, Any]:
+    nutrients = ModelNutritionEstimate.model_validate(item["estimated_nutrition"])
+    food = nutrients.to_food_record(item["suggested_query"], model_version)
+    composition = "、".join(str(part)[:40] for part in item.get("components", [])[:8])
+    assumption = "按照片中整盒或整道菜的可食部分估量，包含可见配菜与酱料；营养为模型粗估，未经称量或数据库查证"
+    if composition:
+        assumption += "；主要组成：" + composition
+    return _prepare_image_food_draft(food, item["suggested_query"], item["estimated_grams"], assumption)
+
+
+def _prepare_image_food_draft(food, query: str, grams: float, assumption: str) -> dict[str, Any]:
+    estimate = calculate_nutrition(food, grams, query)
+    estimate.portion_assumption = assumption
+    now = datetime.now(timezone.utc)
+    result = prepare_health_event(
+        event_input={
+            "event_type": "meal", "input_source": "image", "occurred_at": now.isoformat(),
+            "source_refs": [estimate.source_ref],
+            "payload": {
+                "food": {"food_id": food.food_id, "name": query, "category": food.category},
+                "portion": {"grams": grams, "unit": "g"},
+                "nutrition": estimate.model_dump(mode="json"),
+                "retrieval_query": query, "candidate_source": "model", "estimated": True,
+            },
+        }, user_id=LOCAL_USER_ID, idempotency_key=str(uuid4()), now=now,
+    )
+    if not result["ok"]:
+        raise WebNutritionError("餐食估算未通过草稿校验，请重新识别")
+    return result["data"]
+
+
+def prepare_detected_meal(
+    image_path: str, data: dict[str, Any],
+) -> tuple[str, dict[str, Any] | None]:
+    """逐项匹配并生成整餐草稿；任一项缺失都不允许静默保存半餐。"""
+    validation = validate_image(image_path)
+    if not validation.ok:
+        return validation.message, None
+    drafts = []
+    lines = []
+    problems = ["照片里还有食物没认清"] if data.get("incomplete") else []
+    totals = dict.fromkeys(("calories_kcal", "protein_g", "fat_g", "carbs_g"), 0.0)
+    for item in data.get("detections", []):
+        name = item["suggested_query"]
+        grams = item.get("estimated_grams")
+        if grams is None:
+            problems.append(f"{escape(name)}：暂时看不出有多少")
+            continue
+        # A mixed box must not use a single ingredient's nutrient density for its full weight.
+        mixed_box = bool(item.get("group_id") and len(item.get("components") or []) > 1
+                         and item.get("estimated_nutrition") is not None)
+        draft = None
+        if not mixed_box:
+            report_progress(f"正在查「{name}」的热量和营养")
+            _, _, _, draft, _ = refresh_meal_panel(
+                image_path, name, None, grams, name,
+            )
+        if draft is None:
+            try:
+                if item.get("estimated_nutrition") is not None:
+                    report_progress(f"正在估计「{name}」这份食物的热量和营养")
+                    draft = prepare_model_meal_draft(item, str(data.get("model_version", "视觉模型")))
+                else:
+                    draft = prepare_web_meal_draft(name, grams)
+            except (WebNutritionError, NutritionCalculationError, ValueError) as exc:
+                problems.append(f"{escape(name)}（约 {grams:g} 克）：{escape(str(exc))}")
+                continue
+        drafts.append(draft)
+        payload = draft["event"]["payload"]
+        nutrition = payload["nutrition"]
+        for key in totals:
+            totals[key] += nutrition[key]
+        portion = escape(item.get("portion_description") or "按照片估计份量")
+        source_note = f"参考食物：{escape(payload['food']['name'])}"
+        if payload['food']['food_id'].startswith('MODEL_'):
+            source_note = "按照片估计"
+        elif payload['food']['food_id'].startswith('WEB_'):
+            source_url = nutrition['source_ref'].split('｜')[1]
+            source_note = f"[查看参考资料]({source_url}) · 做法不同，热量会有差别"
+        lines.append(
+            f"- **{escape(name)}** · {portion} · 约 {grams:g} 克 · "
+            f"约 {nutrition['calories_kcal']:.0f} 千卡 · {source_note}"
+        )
+    if not lines and not problems:
+        return "没看清照片里的食物，请换张清楚一点的照片再试试。", None
+    summary = "\n".join(lines)
+    if problems:
+        return (summary + "\n\n这几样还没估出来，这一餐暂时没有保存：\n\n"
+                + "\n".join(f"- {message}" for message in problems)
+                + "\n\n请重新识别一次，等份量和热量估好后再保存。", None)
+    summary = (
+        f"### 这一餐约 {totals['calories_kcal']:.0f} 千卡\n\n"
+        f"共 {len(drafts)} 份食物，已帮你估好大概的份量。\n\n"
+        + summary
+        + f"\n\n蛋白质 {totals['protein_g']:.1f} 克 · 脂肪 {totals['fat_g']:.1f} 克 · "
+        f"碳水 {totals['carbs_g']:.1f} 克\n\n"
+        "份量、热量和营养都是大概值。标注「按照片估计」的数值由 AI 推算，仅供参考。"
+        "看看食物和份量是否符合你实际吃的，再点「保存这一餐」。"
+    )
+    return summary, {"items": drafts}
+
+
+def open_meal_confirmation(image_path: str | None):
+    """上传后直接给出整餐确认；离线旧模式保留手动入口。"""
+    if not DETECTION_CONFIG.uses_remote_provider:
+        workflow, image, query, status, detected = open_meal_image_workflow(image_path)
+        radio, candidate, preview, draft, trace = refresh_meal_panel(
+            image_path, query, None, "", detected,
+        )
+        return (workflow, image, query, status, detected, gr.Column(visible=True),
+                radio, candidate, preview, draft, trace, "", "", gr.Button(interactive=True))
+    status, preview, draft = "", "", None
+    if image_path:
+        report_progress("正在识别图片中的食物并估算份量")
+        result = detect_food(image_path, detector=food_detector, config=DETECTION_CONFIG)
+        if result["ok"]:
+            preview, draft = prepare_detected_meal(image_path, result["data"])
+            status = "这一餐整理好了，不用自己填重量，看看对不对就行。" if draft else "有些食物还没估好，具体原因在下面。"
+        else:
+            status = result["error"]["message"] + "；未保存，请取消后重新上传。"
+    return (gr.Column(visible=bool(image_path)), image_path, "", status, "",
+            gr.Column(visible=False), gr.Radio(choices=[], value=None, visible=False),
+            "", preview, draft, {}, "", "", gr.Button(interactive=bool(draft)))
+
+
+def open_meal_confirmation_stream(image_path: str | None):
+    for update in run_with_progress(lambda: open_meal_confirmation(image_path)):
+        if update.done:
+            yield update.result
+        else:
+            status = f"正在处理 · 已等待 {update.elapsed_seconds} 秒\n\n" + "\n\n".join(update.steps)
+            yield (gr.Column(visible=bool(image_path)), image_path, gr.skip(), status,
+                   gr.skip(), gr.Column(visible=False), gr.skip(), gr.skip(), gr.skip(),
+                   gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.Button(interactive=False))
+
+
 # 界面提供的常用份量，只是替用户省去打字，不是对某种食物的份量断言。
 PORTION_PRESETS: tuple[int, ...] = (50, 100, 150, 200, 300)
 
@@ -3707,9 +3753,7 @@ def confirm_meal_save(
         rows, summary = refresh_today()
 
         return (
-            "还不能保存：请先填好食物名称和份量，"
-            "点「匹配食物」，选中一个候选，"
-            "再点「查看营养估算」生成待确认记录。",
+            "还没有可保存的完整餐食，请按上方提示重试。",
             rows,
             summary,
             gr.skip(),
@@ -3727,22 +3771,25 @@ def confirm_meal_save(
             gr.skip(),
         )
 
-    result = save_health_event(
-        event_input=(
-            preview_state["event"]
-        ),
-        confirmation_token=(
-            preview_state[
-                "confirmation_token"
-            ]
-        ),
-        idempotency_key=(
-            preview_state[
-                "idempotency_key"
-            ]
-        ),
-        store=event_store,
-    )
+    drafts = preview_state.get("items", [preview_state])
+    completed = 0
+    all_idempotent = True
+    for draft in drafts:
+        result = save_health_event(
+            event_input=draft["event"],
+            confirmation_token=draft["confirmation_token"],
+            idempotency_key=draft["idempotency_key"],
+            store=event_store,
+        )
+        if not result["ok"]:
+            result["error"]["message"] = (
+                f"已保存 {completed}/{len(drafts)} 项。"
+                + result["error"]["message"]
+                + "；可再次点击保存，已保存项不会重复写入。"
+            )
+            break
+        completed += 1
+        all_idempotent = all_idempotent and result["data"]["idempotent"]
 
     rows, summary = refresh_today()
 
@@ -3771,15 +3818,15 @@ def confirm_meal_save(
             gr.skip(),
         )
 
-    if result["data"]["idempotent"]:
+    if all_idempotent:
         status = (
             "该饮食草稿已保存过，"
             "没有新增重复记录。"
         )
     else:
         status = (
-            "饮食记录已保存。"
-            "今日概览已同步更新。"
+            (f"饮食记录已保存，共 {completed} 项。" if "items" in preview_state else "饮食记录已保存。")
+            + "今日概览已同步更新。"
         )
 
     chat_history = list(history or [])
@@ -3829,7 +3876,7 @@ def cancel_meal_preview() -> tuple[
 
     return (
         None,
-        "已取消，没有记录任何东西。",
+        "已取消待保存的草稿。",
         "",
         "",
         None,
@@ -4079,6 +4126,17 @@ def send_chat_message(
             container=False,
         ),
     )
+
+
+def send_chat_message_stream(
+    user_text: str, history: list[dict[str, Any]] | None,
+    selected_record: dict[str, Any] | None, request: gr.Request,
+):
+    for update in run_with_progress(lambda: send_chat_message(user_text, history, selected_record, request)):
+        if update.done:
+            yield (*update.result, _progress_card(update.steps, update.elapsed_seconds))
+        else:
+            yield (*[gr.skip() for _ in range(10)], _progress_card(update.steps, update.elapsed_seconds))
 
 
 def confirm_agent_action(
@@ -4698,7 +4756,7 @@ def build_demo() -> gr.Blocks:
                                 gr.Markdown(
                                     f"""
                                     <div class="chat-meal-heading">
-                                      <strong>确认餐食信息</strong>
+                                      <strong>确认这一餐</strong>
                                       <span>{MEAL_WORKFLOW_STEPS}</span>
                                     </div>
                                     """,
@@ -4712,60 +4770,61 @@ def build_demo() -> gr.Blocks:
                                 )
                                 detected_query_state = gr.State(value="")
 
-                                with gr.Row(
-                                    equal_height=False,
-                                    elem_classes="chat-meal-inputs",
-                                ):
-                                    meal_image_preview = gr.Image(
-                                        value=None,
-                                        show_label=False,
-                                        interactive=False,
-                                        height=156,
-                                        elem_classes="chat-meal-image-preview",
-                                    )
-                                    with gr.Column(
-                                        elem_classes="chat-meal-fields",
-                                    ):
-                                        food_query = gr.Textbox(
-                                            label="吃的是什么",
-                                            placeholder="例如：西红柿炒蛋",
-                                        )
-                                        # 用 Textbox 而不是 Number：Number 的
-                                        # 客户端校验会抢在服务端之前弹英文
-                                        # toast，而且会把空值渲染成 0，看着
-                                        # 像已经填了。数值交给 parse_grams。
-                                        grams_input = gr.Textbox(
-                                            label="吃了多少（克）",
-                                            value="",
-                                            placeholder="例如 150",
-                                            lines=1,
-                                            max_lines=1,
-                                        )
-                                        with gr.Row(
-                                            elem_classes="meal-portion-presets",
-                                        ):
-                                            portion_buttons = [
-                                                gr.Button(
-                                                    f"{grams}g",
-                                                    variant="secondary",
-                                                    size="sm",
-                                                    min_width=48,
-                                                )
-                                                for grams in PORTION_PRESETS
-                                            ]
-
-                                candidate_status = gr.Markdown(
-                                    container=False,
-                                    elem_classes="meal-inline-status",
-                                )
-                                selected_food = gr.Radio(
-                                    choices=[],
+                                meal_image_preview = gr.Image(
                                     value=None,
-                                    visible=False,
-                                    interactive=True,
-                                    container=False,
-                                    elem_classes="meal-candidate-select",
+                                    show_label=False,
+                                    interactive=False,
+                                    height=156,
+                                    elem_classes="chat-meal-image-preview",
                                 )
+                                with gr.Column() as manual_meal_fields:
+                                    with gr.Row(
+                                        equal_height=False,
+                                        elem_classes="chat-meal-inputs",
+                                    ):
+                                        with gr.Column(
+                                            elem_classes="chat-meal-fields",
+                                        ):
+                                            food_query = gr.Textbox(
+                                                label="吃的是什么",
+                                                placeholder="例如：西红柿炒蛋",
+                                            )
+                                            # 用 Textbox 而不是 Number：Number 的
+                                            # 客户端校验会抢在服务端之前弹英文
+                                            # toast，而且会把空值渲染成 0，看着
+                                            # 像已经填了。数值交给 parse_grams。
+                                            grams_input = gr.Textbox(
+                                                label="吃了多少（克）",
+                                                value="",
+                                                placeholder="例如 150",
+                                                lines=1,
+                                                max_lines=1,
+                                            )
+                                            with gr.Row(
+                                                elem_classes="meal-portion-presets",
+                                            ):
+                                                portion_buttons = [
+                                                    gr.Button(
+                                                        f"{grams}g",
+                                                        variant="secondary",
+                                                        size="sm",
+                                                        min_width=48,
+                                                    )
+                                                    for grams in PORTION_PRESETS
+                                                ]
+
+                                    candidate_status = gr.Markdown(
+                                        container=False,
+                                        elem_classes="meal-inline-status",
+                                    )
+                                    selected_food = gr.Radio(
+                                        choices=[],
+                                        value=None,
+                                        visible=False,
+                                        interactive=True,
+                                        container=False,
+                                        elem_classes="meal-candidate-select",
+                                    )
                                 meal_preview = gr.Markdown(
                                     "",
                                     elem_classes="meal-preview",
@@ -5524,8 +5583,14 @@ def build_demo() -> gr.Blocks:
                 show_progress="hidden",
             )
 
-        upload_event = image_input.upload(
-            fn=open_meal_image_workflow,
+        image_input.upload(
+            fn=lambda: (None, "正在识别食物并估算份量…", "", gr.Button(interactive=False)),
+            outputs=[meal_preview_state, detection_status, meal_preview, meal_save_button],
+            queue=False,
+            show_progress="hidden",
+        ).then(
+            fn=open_meal_confirmation_stream,
+            concurrency_id="meal-workflow",
             inputs=[image_input],
             outputs=[
                 meal_image_workflow,
@@ -5533,8 +5598,17 @@ def build_demo() -> gr.Blocks:
                 food_query,
                 detection_status,
                 detected_query_state,
+                manual_meal_fields,
+                selected_food,
+                candidate_status,
+                meal_preview,
+                meal_preview_state,
+                latest_retrieval_trace,
+                grams_input,
+                meal_save_status,
+                meal_save_button,
             ],
-            show_progress="hidden",
+            show_progress="full",
         )
 
         # 匹配和试算都是系统的内部动作，不该让用户点按钮触发。
@@ -5554,19 +5628,12 @@ def build_demo() -> gr.Blocks:
             latest_retrieval_trace,
         ]
 
-        upload_event.then(
-            fn=refresh_meal_panel,
-            inputs=meal_panel_inputs,
-            outputs=meal_panel_outputs,
-            show_progress="hidden",
-        )
-
         for meal_trigger in (
             food_query.submit,
             food_query.blur,
             grams_input.submit,
             grams_input.blur,
-            selected_food.change,
+            selected_food.input,
         ):
             meal_trigger(
                 fn=refresh_meal_panel,
@@ -5593,6 +5660,7 @@ def build_demo() -> gr.Blocks:
 
         meal_save_event = meal_save_button.click(
             fn=confirm_meal_save,
+            concurrency_id="meal-workflow",
             inputs=[
                 meal_preview_state,
                 chatbot,
@@ -5630,6 +5698,7 @@ def build_demo() -> gr.Blocks:
         )
         meal_cancel_button.click(
             fn=cancel_meal_preview,
+            concurrency_id="meal-workflow",
             outputs=[
                 meal_preview_state,
                 meal_save_status,
@@ -5674,7 +5743,7 @@ def build_demo() -> gr.Blocks:
             )
 
             result_event = activity_event.then(
-                fn=send_chat_message,
+                fn=send_chat_message_stream,
                 inputs=[
                     pending_agent_text,
                     chatbot,
@@ -5691,6 +5760,7 @@ def build_demo() -> gr.Blocks:
                     cancel_agent_button,
                     selected_record_state,
                     selected_record_context,
+                    agent_activity,
                 ],
                 show_progress="hidden",
             )

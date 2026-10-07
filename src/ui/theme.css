@@ -1052,3 +1052,15 @@ select {
     .healthos-bell.is-ringing .healthos-bell-icon,
     .healthos-bell.is-ringing .healthos-bell-badge { animation: none; }
 }
+
+/* Keep the meal confirmation actions clear of the mobile sticky composer. */
+@media (max-width: 720px) {
+    .chat-panel:has(.agent-process.active) .composer-shell,
+    .chat-panel:has(.chat-meal-workflow:not(.hide):not([style*="display: none"])) .composer-shell {
+        position: static !important;
+    }
+    .chat-meal-workflow {
+        margin-inline: 0 !important;
+        scroll-margin-bottom: 80px;
+    }
+}

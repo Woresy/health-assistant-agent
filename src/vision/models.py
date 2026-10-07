@@ -1,11 +1,13 @@
 """餐食检测的结果模型。
 
-检测只产生"建议检索词"，不产生食物数据行，也不产生任何营养数值。
+检测按餐盒或成品菜给出名称、份量及明确标注的模型营养估算。
 """
 
 from __future__ import annotations
 
 from typing import Literal
+
+from src.nutrition.model_estimate import ModelNutritionEstimate
 
 from pydantic import (
     BaseModel,
@@ -59,6 +61,11 @@ class FoodDetection(BaseModel):
     suggested_query: str = Field(min_length=1)
     confidence: float = Field(ge=0, le=1)
     bbox: BoundingBox | None = None
+    estimated_grams: float | None = Field(default=None, gt=0, le=10000, allow_inf_nan=False)
+    portion_description: str = Field(default="", max_length=120)
+    group_id: str | None = Field(default=None, max_length=40)
+    components: list[str] = Field(default_factory=list, max_length=12)
+    estimated_nutrition: ModelNutritionEstimate | None = None
 
 
 class DetectionResult(BaseModel):
@@ -77,6 +84,7 @@ class DetectionResult(BaseModel):
     min_confidence: float = Field(ge=0, le=1)
     detections: list[FoodDetection] = Field(default_factory=list)
     elapsed_ms: float = Field(ge=0)
+    incomplete: bool = False
 
     @property
     def top_detection(self) -> FoodDetection | None:

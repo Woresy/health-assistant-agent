@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.agent.progress import report_progress
+
 import json
 import re
 from copy import deepcopy
@@ -1137,6 +1139,7 @@ class AgentRunner:
                     role="system",
                     content=prompt_context.render_system_message(),
                 )
+            report_progress("正在分析请求并整理下一步")
             reply = self._model.complete(
                 messages,
                 self._router.tool_definitions_for(

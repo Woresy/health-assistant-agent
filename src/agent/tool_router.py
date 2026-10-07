@@ -36,6 +36,8 @@ from src.nutrition.repository import FoodRepository
 from src.tools.delete_health_event import (
     delete_health_event,
 )
+from src.agent.progress import report_tool
+
 from src.tools.detect_food import (
     detect_food,
 )
@@ -577,7 +579,7 @@ TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     ),
     _definition(
         "detect_food",
-        "对已上传的餐食图片做检测，只返回建议检索词和置信度用于预填；"
+        "识别已上传图片中的多种食物，返回检索词、置信度及可选的 estimated_grams 估算份量；"
         "不选中食物、不计算营养、不保存。识别结果必须再经 "
         "retrieve_nutrition_candidates 检索并由用户确认。",
         DetectFoodArguments,
@@ -1055,6 +1057,7 @@ class HealthToolRouter:
             ],
         }
 
+    @report_tool
     def dispatch(
         self,
         *,
