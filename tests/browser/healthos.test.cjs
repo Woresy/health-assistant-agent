@@ -235,8 +235,8 @@ test("desktop: history restores and a daily record opens its edit conversation",
     "",
     "the composer must clear as soon as the user message enters the conversation",
   );
-  await page.getByText("小满正在处理", { exact: true }).waitFor();
-  await page.getByText("正在选择合适的健康工具", { exact: true }).waitFor();
+  await page.locator(".agent-process.active strong").filter({ hasText: /^小满正在处理 · 已等待 \d+ 秒$/ }).waitFor();
+  await page.getByText("已收到请求，正在准备处理", { exact: true }).waitFor();
   if (screenshotDirectory) {
     fs.mkdirSync(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "thinking-desktop.png"), fullPage: false });
